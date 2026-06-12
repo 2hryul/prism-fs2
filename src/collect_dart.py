@@ -557,14 +557,38 @@ def safe_original_name(name: str, fallback: str) -> str:
     return base or fallback
 
 
+def _dart_download_referer(url: str) -> str:
+    """pdf.do 다운로드에 필수인 Referer(다운로드 페이지 URL) 를 URL 쿼리에서 도출.
+
+    DART 는 Referer 가 해당 문서의 다운로드 페이지(/pdf/download/main.do?rcp_no&dcm_no)가
+    아니면 200 + 빈 본문을 반환한다(2026-06 라이브 진단 — 일반 Referer/뷰어 Referer/쿠키
+    세션 전부 빈 응답, 다운로드 페이지 Referer 만 PDF 정상 수신). 파라미터가 없으면
+    호스트 루트로 폴백.
+    """
+    from urllib.parse import urlparse, parse_qs
+    q = parse_qs(urlparse(url).query)
+    rcp = (q.get("rcp_no") or [None])[0]
+    dcm = (q.get("dcm_no") or [None])[0]
+    if rcp and dcm:
+        return f"https://dart.fss.or.kr/pdf/download/main.do?rcp_no={rcp}&dcm_no={dcm}"
+    return "https://dart.fss.or.kr/"
+
+
 # DART 뷰어 PDF(pdf.do)는 OpenDartReader.download 가 빈 파일을 쓰는 경우가 있어
-# (라이브 확인) httpx 로 직접 GET. Referer/UA 헤더 필요. 성공 시 True.
+# (라이브 확인) httpx 로 직접 GET. UA + 문서별 다운로드 페이지 Referer 필수.
 def download_attachment(url: str, dest_path: Path) -> bool:
-    """첨부 PDF URL을 직접 다운로드(헤더 포함). 비어있지 않은 200 응답만 저장."""
+    """첨부 PDF URL을 직접 다운로드(헤더 포함). 비어있지 않은 200 응답만 저장.
+
+    Referer 는 _dart_download_referer 로 문서별 다운로드 페이지를 지정(없으면 빈 응답).
+    간헐 실패 대비 5회·점증 백오프 재시도.
+    """
     if not _HAS_HTTPX or not url:
         return False
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "http://dart.fss.or.kr/"}
-    for attempt in range(3):
+    # http URL 은 https 로 승격(빈 응답 회피 — Referer 와 스킴 일치).
+    if url.startswith("http://dart.fss.or.kr/"):
+        url = "https://" + url[len("http://"):]
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": _dart_download_referer(url)}
+    for attempt in range(5):
         try:
             with httpx.Client(follow_redirects=True, timeout=60.0, headers=headers) as cl:
                 r = cl.get(url)
@@ -574,14 +598,30 @@ def download_attachment(url: str, dest_path: Path) -> bool:
         except Exception as e:
             # 보안: URL 에 키가 없지만 메시지엔 타입만 남긴다.
             print(f"[download_attachment] 시도{attempt+1} 실패({type(e).__name__})", file=sys.stderr)
-        time.sleep(1.5 * (attempt + 1))
+        time.sleep(2.0 * (attempt + 1))
     return False
+
+
+def dart_viewer_url(rcept_no: str) -> str:
+    """DART 공시 뷰어 URL(키 미포함) — 수집 실패 시 사용자가 직접 열람/다운로드할 링크."""
+    return f"https://dart.fss.or.kr/dsaf001/main.do?rcptNo={rcept_no}"
+
+
+def _note_fail(fail_reasons: Optional[dict], doc_type: str, reason: str,
+               url: Optional[str] = None):
+    """수집 실패 사유(+사용자 직접 다운로드용 URL)를 호출자 dict 에 기록(없으면 무시).
+
+    url 은 DART 공개 링크만 — pdf.do 다운로드 URL/공시 뷰어 URL 모두 API 키 미포함.
+    """
+    if fail_reasons is not None:
+        fail_reasons[doc_type] = {"reason": reason, "url": url}
 
 
 def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
                           out_name: str, doc_type: str,
                           prefetched_docs=None,
-                          exclude_url: Optional[str] = None) -> Optional[dict]:
+                          exclude_url: Optional[str] = None,
+                          fail_reasons: Optional[dict] = None) -> Optional[dict]:
     """검토/별도검토보고서 첨부(표시용 PDF)를 OpenDartReader 2단계로 수집하는 공통 본체.
 
     경로(라이브 검증됨):
@@ -622,6 +662,8 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         if cand is None:
             print(f"{log} rcept_no={rcept_no} 후보 없음 ({doc_type} 미수집, 정상)",
                   file=sys.stderr)
+            _note_fail(fail_reasons, doc_type, "해당 첨부문서가 공시에 없음",
+                       url=dart_viewer_url(rcept_no))
             return None
 
         # 2) 후보 문서의 다운로드 첨부파일(dict{파일명: url}) → pdf_url 선택.
@@ -636,6 +678,8 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         if not files:
             print(f"{log} rcept_no={rcept_no} 첨부파일 없음 "
                   f"(title={cand['title']}, 3회 재시도 후) — {doc_type} 스킵", file=sys.stderr)
+            _note_fail(fail_reasons, doc_type, "첨부파일 목록 조회 실패(재시도 권장)",
+                       url=cand["url"] or dart_viewer_url(rcept_no))
             return None
         # .pdf 키 우선, 없으면 첫 항목.
         pdf_name = next((k for k in files if k.lower().endswith(".pdf")), None)
@@ -647,6 +691,8 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         if exclude_url is not None and pdf_url == exclude_url:
             print(f"{log} rcept_no={rcept_no} 연결 review 와 동일 첨부 URL — "
                   f"{doc_type} 중복 스킵", file=sys.stderr)
+            _note_fail(fail_reasons, doc_type, "연결 검토보고서와 동일 첨부(별도 미제공 공시)",
+                       url=dart_viewer_url(rcept_no))
             return None
 
         # 3) 다운로드 → R2: DART 원본 파일명 그대로 저장(수정/삭제 금지). 재시도.
@@ -656,7 +702,9 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         # OpenDartReader.download 는 pdf.do URL 에서 빈 파일을 쓰는 사례가 있어 직접 GET 사용.
         if not download_attachment(pdf_url, orig_path):
             print(f"{log} rcept_no={rcept_no} 다운로드 실패 "
-                  f"(title={cand['title']}, 3회 재시도 후) — {doc_type} 스킵", file=sys.stderr)
+                  f"(title={cand['title']}, 재시도 후) — {doc_type} 스킵", file=sys.stderr)
+            _note_fail(fail_reasons, doc_type, "PDF 다운로드 실패(DART 응답 없음 — 재시도 권장)",
+                       url=pdf_url)
             return None
 
         # 4) 매직넘버 검증 — PDF 면 앱 내부용 표준본으로 복제(원본 보존), 아니면 폴백
@@ -678,6 +726,7 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         print(f"{log} rcept_no={rcept_no} 비PDF 첨부 - "
               f"원본({orig_name}) 보존, {out_name} 미생성(첫바이트={head!r}, mime={mime})",
               file=sys.stderr)
+        _note_fail(fail_reasons, doc_type, "PDF 아님(원본만 보존 — 표시 불가)", url=pdf_url)
         return {
             "doc_type": doc_type,
             "file": orig_name,
@@ -692,11 +741,14 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
         # 보안: OpenDartReader 예외 메시지는 키 포함 URL 을 노출할 수 있음 → 타입명만.
         print(f"{log} rcept_no={rcept_no} {doc_type} 수집 실패 "
               f"({type(e).__name__}) — {doc_type} 스킵, 기존 수집은 계속.", file=sys.stderr)
+        _note_fail(fail_reasons, doc_type, "수집 오류(서버 로그 참조)",
+                   url=dart_viewer_url(rcept_no))
         return None
 
 
 def fetch_review_attachment(odr, rcept_no: str, dest_dir: Path,
-                            prefetched_docs=None) -> Optional[dict]:
+                            prefetched_docs=None,
+                            fail_reasons: Optional[dict] = None) -> Optional[dict]:
     """연결(consolidated) 검토/감사보고서 첨부(표시용 PDF) 수집 — _fetch_attachment_pdf 래퍼.
 
     기존 계약 보존: 성공 시 review.pdf 로 복제, 반환 dict 의 doc_type='review',
@@ -717,12 +769,14 @@ def fetch_review_attachment(odr, rcept_no: str, dest_dir: Path,
         picker=pick_review_doc_consolidated,
         out_name="review.pdf", doc_type="review",
         prefetched_docs=prefetched_docs,
+        fail_reasons=fail_reasons,
     )
 
 
 def fetch_review_sep_attachment(odr, rcept_no: str, dest_dir: Path,
                                 prefetched_docs=None,
-                                exclude_url: Optional[str] = None) -> Optional[dict]:
+                                exclude_url: Optional[str] = None,
+                                fail_reasons: Optional[dict] = None) -> Optional[dict]:
     """별도(separate) 검토/감사보고서 첨부(표시용 PDF) 수집 — _fetch_attachment_pdf 래퍼.
 
     picker=pick_review_doc_separate('연결' 미포함), out=review_sep.pdf, doc_type=review_sep.
@@ -743,11 +797,13 @@ def fetch_review_sep_attachment(odr, rcept_no: str, dest_dir: Path,
         out_name="review_sep.pdf", doc_type="review_sep",
         prefetched_docs=prefetched_docs,
         exclude_url=exclude_url,
+        fail_reasons=fail_reasons,
     )
 
 
 def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
-                            overwrite: bool = False) -> Optional[dict]:
+                            overwrite: bool = False,
+                            fail_reasons: Optional[dict] = None) -> Optional[dict]:
     """분기/반기/사업보고서 "본문"(표시용 PDF)을 OpenDartReader 2단계로 수집.
 
     경로(라이브 확인) — 본문 보고서는 attach_docs(첨부=검토/감사)에 없고
@@ -791,11 +847,15 @@ def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
         if not files:
             print(f"[fetch_report_attachment] rcept_no={rcept_no} 첨부파일 없음 "
                   f"(3회 재시도 후) — report 스킵", file=sys.stderr)
+            _note_fail(fail_reasons, "report", "첨부파일 목록 조회 실패(재시도 권장)",
+                       url=dart_viewer_url(rcept_no))
             return None
         picked = pick_report_pdf(files)
         if picked is None:
             print(f"[fetch_report_attachment] rcept_no={rcept_no} 본문 보고서 PDF 후보 없음 "
                   f"(.pdf 없음/XBRL zip 만 존재) — report 미수집", file=sys.stderr)
+            _note_fail(fail_reasons, "report", "본문 PDF 미제공 공시(수동 업로드 필요)",
+                       url=dart_viewer_url(rcept_no))
             return None
         pdf_name, pdf_url = picked
 
@@ -806,7 +866,9 @@ def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
         # OpenDartReader.download 는 pdf.do URL 에서 빈 파일을 쓰는 사례가 있어 직접 GET 사용.
         if not download_attachment(pdf_url, orig_path):
             print(f"[fetch_report_attachment] rcept_no={rcept_no} 다운로드 실패 "
-                  f"(file={pdf_name}, 3회 재시도 후) — report 스킵", file=sys.stderr)
+                  f"(file={pdf_name}, 재시도 후) — report 스킵", file=sys.stderr)
+            _note_fail(fail_reasons, "report", "PDF 다운로드 실패(DART 응답 없음 — 재시도 권장)",
+                       url=pdf_url)
             return None
 
         # 3) 매직넘버 검증 — PDF 면 앱 내부용 report.pdf 로 복제(원본 보존), 아니면 폴백
@@ -825,6 +887,7 @@ def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
         mime = "application/zip" if head[:2] == b"PK" else "application/octet-stream"
         print(f"[fetch_report_attachment] rcept_no={rcept_no} 비PDF 첨부 - "
               f"원본({orig_name}) 보존, report.pdf 미생성(첫바이트={head!r}, mime={mime})", file=sys.stderr)
+        _note_fail(fail_reasons, "report", "PDF 아님(원본만 보존 — 표시 불가)", url=pdf_url)
         return {
             "doc_type": "report",
             "file": orig_name,
@@ -838,6 +901,8 @@ def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
         # 보안: OpenDartReader 예외 메시지는 키 포함 URL 을 노출할 수 있음 → 타입명만.
         print(f"[fetch_report_attachment] rcept_no={rcept_no} 본문 보고서 수집 실패 "
               f"({type(e).__name__}) — report 스킵, 기존 수집은 계속.", file=sys.stderr)
+        _note_fail(fail_reasons, "report", "수집 오류(서버 로그 참조)",
+                   url=dart_viewer_url(rcept_no))
         return None
 
 
@@ -1022,7 +1087,9 @@ def pick_target_report(list_resp: dict, reprt_code: str, year: int) -> Optional[
 
 def collect_company(client, api_key: str, company: str, corp_code: str,
                     year: int, reprt_code: str, period: str, odr=None,
-                    collect_report: bool = False) -> dict:
+                    collect_report: bool = False,
+                    collect_review: bool = True,
+                    collect_review_sep: bool = True) -> dict:
     """회사 1곳 라이브 수집. fs_structured.json/xbrl/source/meta.json 저장.
 
     index.json 은 절대 건드리지 않는다(인덱싱 경로 보존). report.pdf 는 기본적으로
@@ -1033,6 +1100,8 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
         odr: OpenDartReader 인스턴스(run_live 에서 1회 생성). 검토보고서(review.pdf)
              및 본문 보고서(report.pdf) 첨부 수집에 사용. None 이면 스킵.
         collect_report: True 면 본문 보고서 PDF(report.pdf) 자동수집 시도(무클로버).
+        collect_review: True 면 연결재무제표 검토보고서(review.pdf) 첨부 수집 시도.
+        collect_review_sep: True 면 별도재무제표 검토보고서(review_sep.pdf) 첨부 수집 시도.
     Returns: meta dict.
     """
     d = entry_dir(company, period)
@@ -1095,7 +1164,9 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     #    (네트워크 중복 회피). odr/rcept_no 없으면 양쪽 스킵.
     review = None
     review_sep = None
-    if odr and rcept_no:
+    fail_reasons: dict = {}  # 선택된 문서의 수집 실패 사유(doc_type→사유) — UI 안내용
+    # 사용자가 선택한 검토보고서만 첨부 수집 — 둘 다 미선택이면 attach_docs 호출 자체 생략.
+    if odr and rcept_no and (collect_review or collect_review_sep):
         try:
             attach_docs_rows = odr.attach_docs(rcept_no)
         except Exception as e:
@@ -1103,18 +1174,26 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
             print(f"[collect_company] {company} attach_docs 실패 "
                   f"({type(e).__name__}) — review/review_sep 스킵.", file=sys.stderr)
             attach_docs_rows = None
+            for dt, sel in (("review", collect_review), ("review_sep", collect_review_sep)):
+                if sel:
+                    fail_reasons[dt] = {"reason": "첨부문서 목록 조회 실패(재시도 권장)",
+                                        "url": dart_viewer_url(rcept_no)}
         if attach_docs_rows is not None:
-            review = fetch_review_attachment(odr, rcept_no, d,
-                                             prefetched_docs=attach_docs_rows)
+            if collect_review:
+                review = fetch_review_attachment(odr, rcept_no, d,
+                                                 prefetched_docs=attach_docs_rows,
+                                                 fail_reasons=fail_reasons)
             # 별도는 연결 review 와 동일 첨부 URL 이면 중복 저장하지 않는다(exclude_url).
-            review_sep = fetch_review_sep_attachment(
-                odr, rcept_no, d,
-                prefetched_docs=attach_docs_rows,
-                exclude_url=(review or {}).get("pdf_url"),
-            )
+            if collect_review_sep:
+                review_sep = fetch_review_sep_attachment(
+                    odr, rcept_no, d,
+                    prefetched_docs=attach_docs_rows,
+                    exclude_url=(review or {}).get("pdf_url"),
+                    fail_reasons=fail_reasons,
+                )
 
     # 7) 본문 보고서(표시용 PDF) 첨부 수집 — opt-in(collect_report). 무클로버.
-    report_attach = (fetch_report_attachment(odr, rcept_no, d)
+    report_attach = (fetch_report_attachment(odr, rcept_no, d, fail_reasons=fail_reasons)
                      if (collect_report and odr and rcept_no) else None)
     report_pdf_ok = bool(report_attach and report_attach.get("display_ok"))
 
@@ -1158,6 +1237,8 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
         "display_pdf": "report.pdf" if report_pdf_ok else "manual_upload_required",
         # 문서 묶음: report(제출원문) + review(검토보고서, 성공 시). Step B(main.py) 가 소비.
         "documents": documents,
+        # 선택했으나 실패한 문서의 사유(doc_type→사유) — UI 상세표가 행 단위로 안내.
+        "fetch_failures": fail_reasons,
         "review_collected": bool(review),
         "review_sep_collected": bool(review_sep),
         "report_collected": report_pdf_ok,
