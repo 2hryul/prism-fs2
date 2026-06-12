@@ -328,7 +328,7 @@
 
     <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-bottom:8px; font-size:12px; color:#374151;">
       <span style="color:#6b7280; font-weight:600;">프리셋 적용 문서:</span>
-      <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="report" checked style="width:auto;"> 📄 사업보고서</label>
+      <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="report" style="width:auto;"> 📄 사업보고서</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review_sep" style="width:auto;"> 🏢 별도재무제표</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review" style="width:auto;"> 🔗 연결재무제표</label>
     </div>
@@ -339,7 +339,10 @@
       <button class="preset-btn" onclick="presetSameQuarterAll()">동일 분기·모든 회사</button>
       <button class="preset-btn" onclick="presetTimeSeries('신한')">신한 전 분기 추이</button>
       <button class="preset-btn" onclick="clearSelection()">선택 초기화</button>
-      <button class="preset-btn" id="add-toggle" onclick="openAddModal('collect')" style="margin-left:auto; background:#ecfdf5; border-color:#6ee7b7; color:#047857; font-weight:700;">➕ 분기/연간 자료 추가</button>
+      <button class="preset-btn" onclick="exportLibrary()" style="margin-left:auto;" title="라이브러리 전체를 이식용 zip으로 내보내기(인덱스·PDF·재무데이터 — GPU 없는 PC에서 '가져오기'로 재활용)">📤 내보내기</button>
+      <button class="preset-btn" onclick="document.getElementById('import-file').click()" title="내보내기 zip을 가져와 라이브러리에 병합(임베딩 차원·스키마 자동 검증)">📥 가져오기</button>
+      <input type="file" id="import-file" accept=".zip" style="display:none;" onchange="importLibrary(this.files[0])">
+      <button class="preset-btn" id="add-toggle" onclick="openAddModal('collect')" style="background:#ecfdf5; border-color:#6ee7b7; color:#047857; font-weight:700;">➕ 분기/연간 자료 추가</button>
     </div>
 
     <div class="selected-bar" id="selected-bar">
@@ -372,6 +375,9 @@
         <option value="주기">주기(회계정책)</option>
         <option value="서술형">서술형</option>
       </select>
+      <label style="display:flex; align-items:center; gap:5px; font-size:12.5px; color:#374151; white-space:nowrap; cursor:pointer;"
+        title="Ollama 가용 시 후보 순서를 LLM이 재정렬(점수 불변·실패 시 무시)">
+        <input type="checkbox" id="cmp-rerank" style="width:auto;"> 🤖 AI 재정렬</label>
       <button class="btn" onclick="doCompare()">검색</button>
     </div>
 
@@ -644,13 +650,17 @@
         <select id="add-type"></select>
       </div>
       <div class="field">
-        <label style="font-size:12px; color:#065f46;">본문 PDF</label>
-        <label style="font-size:13px; display:flex; align-items:center; gap:6px; padding:9px 0;"><input type="checkbox" id="add-report" checked style="width:auto;"> 분기보고서 본문 포함</label>
+        <label style="font-size:12px; color:#065f46;">수집 문서 <span style="color:#6b7280; font-weight:400;">(재무데이터·XBRL은 항상 수집)</span></label>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; padding:9px 0; font-size:13px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-report" checked style="width:auto;"> 📄 보고서 본문</label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review-sep" checked style="width:auto;"> 🏢 별도재무제표 검토보고서</label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review" checked style="width:auto;"> 🔗 연결재무제표 검토보고서</label>
+        </div>
       </div>
       <button class="btn" id="add-btn" onclick="doAddCollect()" style="background:#047857;">DART 수집</button>
       <button class="preset-btn" onclick="addEmptyColumn()" title="데이터 없이 매트릭스에 빈 컬럼만 추가(셀 클릭으로 개별 수집)">빈 컬럼만 추가</button>
     </div>
-    <p style="font-size:11px; color:#6b7280; margin-top:8px;">수집 후 자동 인덱싱(본문 청크). 매트릭스 빈 셀을 클릭하면 해당 셀을 바로 수집합니다.</p>
+    <p style="font-size:11px; color:#6b7280; margin-top:8px;">수집 후 선택한 문서만 자동 인덱싱. 매트릭스 빈 셀을 클릭하면 해당 셀을 바로 수집합니다.</p>
     <div id="add-status" style="margin-top:8px;"></div>
   </div>
 
@@ -971,8 +981,10 @@
             }
             const cnt = docCount(entry, doc);
             if (!docIndexed(entry, doc) || !cnt) {
-              // 해당 문서 카테고리 미인덱싱 → 비활성(–)
-              return `<div class="doc-pill absent${reviewCls}" title="${ttl} 미추출">
+              // 해당 문서 카테고리 미인덱싱 → 클릭 시 자료추가 모달을 이 셀·문서로 프리셋
+              return `<div class="doc-pill absent${reviewCls}" style="cursor:pointer;"
+                        title="${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다"
+                        onclick="event.stopPropagation();onAbsentDocClick('${c}','${p}','${doc}')">
                         <span class="dp-label">${label}</span>
                         <span class="dp-count">–</span></div>`;
             }
@@ -1004,14 +1016,55 @@
     table.innerHTML = html;
   }
 
-  // 빈 셀 클릭 → 라이브러리 인라인 패널을 해당 회사·기간으로 프리필+펼침(1클릭 수집)
-  window.onEmptyCellClick = function(company, period) {
+  // ----- 인덱스 이식(내보내기/가져오기) — GPU 없는 PC 재활용(Phase5b) -----
+  window.exportLibrary = function() {
+    // 서버가 zip 생성(인덱스·PDF·재무데이터, xbrl/source 원본 제외) → 브라우저 다운로드
+    toast("내보내기 zip 생성 중... (수백 MB — 잠시 걸릴 수 있습니다)");
+    window.open(`${API}/api/library/export`, "_blank");
+  };
+  window.importLibrary = async function(file) {
+    if (!file) return;
+    const overwrite = confirm("동일 셀이 이미 있으면 덮어쓸까요?\n(취소 = 기존 셀 유지, 새 셀만 추가)");
+    toast("가져오는 중... (검증 + 병합)");
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("overwrite", overwrite ? "true" : "false");
+    let res, d;
+    try {
+      res = await fetch(`${API}/api/library/import`, { method: "POST", body: fd });
+      d = await res.json();
+    } catch (e) { return toast(`가져오기 실패: ${e}`); }
+    document.getElementById("import-file").value = "";
+    if (!res.ok) return toast(`가져오기 실패: ${d.detail || res.status}`);
+    toast(`✓ 가져오기 완료 — ${d.imported.length}개 셀 병합` +
+          (d.skipped.length ? `, ${d.skipped.length}개 건너뜀(기존 유지)` : ""));
+    loadLibrary();
+  };
+
+  // 자료추가 모달을 해당 회사·기간으로 프리셋(빈 셀·미수집 pill 클릭 공용)
+  function presetAddModal(company, period) {
     openAddModal('collect');
     const yr = period.slice(0, 4), tp = period.slice(4);
     const setSel = (id, v) => { const el = document.getElementById(id); if (el && [...el.options].some(o => o.value === v)) el.value = v; };
     setSel("add-company", company); setSel("add-year", yr); setSel("add-type", tp);
+  }
+
+  // 빈 셀 클릭 → 라이브러리 인라인 패널을 해당 회사·기간으로 프리필+펼침(1클릭 수집)
+  window.onEmptyCellClick = function(company, period) {
+    presetAddModal(company, period);
     EXTRA_PERIODS.add(period); saveExtraPeriods();
     document.getElementById("add-status").innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} 선택됨 — <b>[DART 수집]</b>을 누르면 이 셀을 수집합니다. (수동 업로드는 'PDF 업로드' 서브탭)</div>`;
+  };
+
+  // 미수집 문서 pill(–) 클릭 → 모달을 회사·기간으로 프리셋 + 해당 문서만 수집 선택(누락분 1클릭 수집 준비)
+  window.onAbsentDocClick = function(company, period, docType) {
+    presetAddModal(company, period);
+    document.getElementById("add-report").checked = docType === "report";
+    document.getElementById("add-review").checked = docType === "review";
+    document.getElementById("add-review-sep").checked = docType === "review_sep";
+    const docLabel = docType === "report" ? reportDocLabel(period)
+      : `${DOC_ICON[docType]} ${DOC_FULL[docType]} 검토보고서`;
+    document.getElementById("add-status").innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} · ${docLabel} <b>미수집</b> — <b>[DART 수집]</b>을 누르면 이 문서를 수집합니다. (수동 업로드는 'PDF 업로드' 서브탭)</div>`;
   };
 
   // 문서유형별 삭제 — 해당 PDF·인덱스만 제거, 다른 문서/재무데이터 보존.
@@ -1159,6 +1212,13 @@
     const docType = document.getElementById("up-doctype").value;  // 사업보고서/별도재무제표/연결재무제표
     const file = document.getElementById("up-file").files[0];
     if (!file) return toast("PDF 파일을 선택하세요.");
+    // 감지 결과와 선택이 다르면 업로드 전 최종 확인 — 잘못된 셀(기간/문서) 등록 방지.
+    if (UP_DETECTED) {
+      const diffs = detectDiffs(UP_DETECTED);
+      if (diffs.length && !confirm(
+        `PDF 감지 결과와 선택이 다릅니다:\n  ${diffs.join("\n  ")}\n\n` +
+        `현재 선택대로 업로드할까요? (취소 후 배너의 [자동 채움]으로 보정할 수 있습니다)`)) return;
+    }
 
     const status = document.getElementById("up-status");
     status.innerHTML = `<div class="info-banner">업로드 중... ${file.name}</div>`;
@@ -1230,20 +1290,32 @@
     document.getElementById("up-detect").classList.add("hidden");
   };
   window.dismissDetect = function() { document.getElementById("up-detect").classList.add("hidden"); };
+  // 파일 선택 후 회사/연도/기간/문서유형을 바꾸면 배너를 재검증 — "일치" 배너가
+  // 변경 후에도 남아 잘못된 셀로 업로드되는 사고 방지(스테일 배너 버그).
+  ["up-company", "up-year", "up-type", "up-doctype"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", () => { if (UP_DETECTED) renderDetectBanner(UP_DETECTED); });
+  });
 
-  function renderDetectBanner(det) {
-    const box = document.getElementById("up-detect");
-    UP_DETECTED = det;
-    if (!det || (!det.company && !det.period && !det.docType)) { box.classList.add("hidden"); return; }
+  // 감지 결과 vs 현재 선택의 차이 목록(평문) — 배너 렌더와 업로드 가드가 공유.
+  function detectDiffs(det) {
     const cur = {
       company: document.getElementById("up-company").value,
       period: composePeriod(document.getElementById("up-year").value, document.getElementById("up-type").value),
       docType: document.getElementById("up-doctype").value,
     };
     const diffs = [];
-    if (det.company && det.company !== cur.company) diffs.push(`회사 <b>${cur.company}→${det.company}</b>`);
-    if (det.period && det.period !== cur.period) diffs.push(`기간 <b>${cur.period}→${det.period}</b>`);
-    if (det.docType && det.docType !== cur.docType) diffs.push(`문서 <b>${(DOC_FULL[cur.docType]||cur.docType)}→${(DOC_FULL[det.docType]||det.docType)}</b>`);
+    if (det.company && det.company !== cur.company) diffs.push(`회사 ${cur.company}→${det.company}`);
+    if (det.period && det.period !== cur.period) diffs.push(`기간 ${cur.period}→${det.period}`);
+    if (det.docType && det.docType !== cur.docType) diffs.push(`문서 ${(DOC_FULL[cur.docType]||cur.docType)}→${(DOC_FULL[det.docType]||det.docType)}`);
+    return diffs;
+  }
+
+  function renderDetectBanner(det) {
+    const box = document.getElementById("up-detect");
+    UP_DETECTED = det;
+    if (!det || (!det.company && !det.period && !det.docType)) { box.classList.add("hidden"); return; }
+    const diffs = detectDiffs(det).map(d => `<b>${escapeHtml(d)}</b>`);
     if (diffs.length === 0) {
       box.className = "detect-banner ok";
       const parts = [det.company, det.period && periodLabel(det.period), det.docType && DOC_FULL[det.docType]].filter(Boolean).join(" · ");
@@ -1302,12 +1374,102 @@
     }, 800);
   }
 
+  // 본문 보고서 라벨 — 기간 인지(FY=사업/Q2=반기/Q1·Q3=분기). 검토 2종과 명확 구분.
+  function reportDocLabel(period) {
+    const sfx = (period || "").slice(4);
+    const nm = sfx === "FY" ? "사업보고서" : (sfx === "Q2" ? "반기보고서" : "분기보고서");
+    return `${DOC_ICON.report} ${nm}(본문)`;
+  }
+
+  // 수집 완료/부분실패 상세 블록 — 원본 보고서명·문서별 파일명·인덱싱·재무 fs_div·저장경로.
+  // 이번 런 결과(✓ 신규/✗ 실패)와 기존 보유 파일(보유)을 구분해 "안 받은 문서를 받았다"는 오인 차단.
+  function renderCollectDetail(item, company, period, headline) {
+    const td = `style="padding:2px 8px;border-top:1px solid #e5e7eb;vertical-align:top;"`;
+    const req = item.requested || {};                 // 구버전 상태엔 없음 → 전부 요청으로 간주
+    const fails = item.fetch_failures || {};
+    const isReq = dt => req[dt] !== false;
+    const docTypes = ["report", "review_sep", "review"];
+    const anyFail = docTypes.some(dt => isReq(dt) && fails[dt]);
+    if (anyFail) headline = headline.replace("✓", "⚠") + " — 일부 문서 실패";
+    const rows = docTypes.map(dt => {
+      const label = dt === "report" ? reportDocLabel(period)
+        : `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
+      const d = (item.documents || []).find(x => x.doc_type === dt);
+      if (!d || !d.collected) {
+        if (d && d.manual_upload_required) {
+          return `<tr><td ${td}>${label}</td><td ${td}>–</td>
+                  <td ${td} colspan="2" style="color:#b45309;">본문 PDF 미제공 — PDF 업로드 탭에서 수동 업로드</td>
+                  <td ${td}>–</td></tr>`;
+        }
+        if (isReq(dt) && fails[dt]) {
+          // 요청했으나 실패 — 행 전체 강조 + 사유 + 사용자가 직접 받을 수 있는 DART 링크 제공
+          const f = fails[dt];
+          const reason = escapeHtml((f && f.reason) || f);
+          const url = (f && typeof f === "object" && f.url) ? f.url : null;
+          // 공시 뷰어 링크는 백엔드 데이터(viewer_url)로만 — 외부 호스트 하드코딩 금지(폐쇄망 게이트)
+          const viewerUrl = item.viewer_url || null;
+          const isViewer = url && url.indexOf("dsaf001/main.do") !== -1;
+          const links = [];
+          if (url && !isViewer) {
+            links.push(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+              style="color:#b91c1c; font-weight:700;">⬇ DART에서 직접 다운로드</a>`);
+          }
+          if (viewerUrl || isViewer) {
+            links.push(`<a href="${escapeHtml(isViewer ? url : viewerUrl)}" target="_blank" rel="noopener"
+              style="color:#374151;">공시 원문 열기 ↗</a>`);
+          }
+          return `<tr style="background:#fef2f2;"><td ${td}>${label}</td>
+                  <td ${td}><span style="display:inline-block; background:#b91c1c; color:#fff;
+                    border-radius:4px; padding:1px 7px; font-size:11px; font-weight:700;">✗ 실패</span></td>
+                  <td ${td} colspan="3"><div style="color:#b91c1c; font-weight:600;">${reason}</div>
+                    <div style="margin-top:4px; display:flex; gap:14px; flex-wrap:wrap; align-items:center; font-size:12px;">
+                      ${links.join("")}
+                      <span style="color:#6b7280;">받은 파일은 <b>'PDF 업로드'</b> 탭에서 등록하세요</span>
+                    </div></td></tr>`;
+        }
+        const why = isReq(dt) ? "미수집" : "수집 대상 아님(선택 안 함)";
+        return `<tr><td ${td}>${label}</td><td ${td}>–</td>
+                <td ${td} colspan="2" style="color:#9ca3af;">${why}</td><td ${td}>–</td></tr>`;
+      }
+      const orig = escapeHtml(d.filename_original || "–");
+      const dartTtl = d.filename_dart ? ` title="DART 첨부: ${escapeHtml(d.filename_dart)}"` : "";
+      const saved = d.renamed
+        ? `<b>${escapeHtml(d.file)}</b> <span style="color:#6b7280;">(원본명에서 변경)</span>`
+        : escapeHtml(d.file || d.filename_original || "–");
+      const idx = d.indexed ? `✓ 주석 ${d.notes_count != null ? d.notes_count + "개" : "완료"}` : "–";
+      // 이번 런 신규 수집 vs 기존 보유 파일 구분
+      const got = d.existing
+        ? `<span style="color:#6b7280;" title="이번 수집이 아닌 기존 파일입니다">보유</span>`
+        : `<span style="color:#047857;">✓ 신규</span>`;
+      return `<tr><td ${td}>${label}</td><td ${td}>${got}</td>
+              <td ${td}${dartTtl}>${orig}</td><td ${td}>${saved}</td><td ${td}>${idx}</td></tr>`;
+    }).join("");
+    const fs = (item.fs_divs || []);
+    const fsLine = `🔗 연결 재무데이터(XBRL) ${fs.includes("CFS") ? "✓" : "–"} · ` +
+                   `🏢 별도 재무데이터(XBRL) ${fs.includes("OFS") ? "✓" : "–"}`;
+    const rcept = item.rcept_no ? ` <span style="color:#6b7280;">(접수번호 ${escapeHtml(item.rcept_no)})</span>` : "";
+    const nm = item.report_nm ? ` — ${escapeHtml(item.report_nm)}` : "";
+    return `<div style="font-weight:600;">${headline}${nm}${rcept}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:5px;">
+        <tr style="color:#6b7280;text-align:left;"><th style="padding:2px 8px;">구분</th>
+          <th style="padding:2px 8px;">수집</th><th style="padding:2px 8px;">원본 파일명</th>
+          <th style="padding:2px 8px;">저장 파일명</th><th style="padding:2px 8px;">인덱싱</th></tr>
+        ${rows}</table>
+      <div style="margin-top:5px;font-size:12px;">${fsLine}</div>
+      <div style="margin-top:3px;font-size:12px;color:#6b7280;">저장경로: ${escapeHtml(item.path || "")}</div>
+      <div style="margin-top:3px;font-size:12px;">✓ 라이브러리 등록됨 — 매트릭스 반영</div>`;
+  }
+
   // ----- DART 자동 수집 (공용 코어 — 업로드 탭·라이브러리 패널 공유) -----
-  function startCollect(company, period, includeReport, statusEl) {
+  // docSel: 수집할 문서 선택 {report, review, review_sep} (불리언). 재무데이터는 항상 수집.
+  function startCollect(company, period, docSel, statusEl) {
     statusEl.innerHTML = `<div class="info-banner">DART에서 ${company}·${periodLabel(period)} 수집 시작...</div>`;
     return fetch(`${API}/api/library/collect`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company, period, include_report_pdf: includeReport }),
+      body: JSON.stringify({ company, period,
+        include_report_pdf: !!docSel.report,
+        include_review: !!docSel.review,
+        include_review_sep: !!docSel.review_sep }),
     }).then(async res => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { statusEl.innerHTML = `<div class="warn-banner">${company} 수집 시작 실패: ${data.detail || "오류"}</div>`; return false; }
@@ -1324,14 +1486,27 @@
         if (!item) return;
         if (item.status === "done") {
           clearInterval(interval);
-          const rep = item.report_collected ? "분기보고서 ✓" : "분기보고서 –";
-          const rev = item.review_collected ? "검토 ✓" : "검토 –";
-          const idx = (item.indexed || []).length ? ` · 인덱싱: ${item.indexed.join(", ")}` : "";
-          statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rep} / ${rev}${idx}</div>`;
+          if ((item.documents || []).length) {
+            statusEl.innerHTML = `<div class="info-banner">` +
+              renderCollectDetail(item, company, period, `✓ ${company}·${periodLabel(period)} 수집 완료`) + `</div>`;
+          } else {
+            // 구버전 상태/상세 부재 폴백 — 기존 한 줄 요약 유지
+            const rep = item.report_collected ? "분기보고서 ✓" : "분기보고서 –";
+            const rev = item.review_collected ? "검토 ✓" : "검토 –";
+            const idx = (item.indexed || []).length ? ` · 인덱싱: ${item.indexed.join(", ")}` : "";
+            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rep} / ${rev}${idx}</div>`;
+          }
           loadLibrary(); resolve(true);
         } else if (item.status === "error") {
           clearInterval(interval);
-          statusEl.innerHTML = `<div class="warn-banner">${company} 수집 실패: ${item.error}</div>`; resolve(false);
+          // 인덱싱 단계 실패여도 카탈로그 등록은 끝난 상태 → 부분 상세 + 매트릭스 갱신
+          let html = `<div class="warn-banner">${company} 수집 실패: ${item.error}</div>`;
+          if ((item.documents || []).length) {
+            html += `<div class="info-banner">` +
+              renderCollectDetail(item, company, period, `${company}·${periodLabel(period)} 부분 수집 결과`) + `</div>`;
+          }
+          statusEl.innerHTML = html;
+          loadLibrary(); resolve(false);
         } else {
           const stage = (item.stage === "indexing" || item.status === "indexing") ? "인덱싱 중" : "수집 중";
           statusEl.innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} ${stage}...</div>`;
@@ -1349,6 +1524,7 @@
   window.closeAddModal = function() {
     document.getElementById("add-modal").classList.add("hidden");
     document.getElementById("add-modal-backdrop").classList.add("hidden");
+    loadLibrary();  // 모달이 매트릭스를 가리므로 닫는 즉시 등록 현황 최신화
   };
   window.showAddSub = function(name) {
     document.querySelectorAll("#add-modal .modal-subtab").forEach(b => b.classList.toggle("active", b.dataset.sub === name));
@@ -1370,17 +1546,33 @@
   window.doAddCollect = async function() {
     const companySel = document.getElementById("add-company").value;
     const period = composePeriod(document.getElementById("add-year").value, document.getElementById("add-type").value);
-    const includeReport = document.getElementById("add-report").checked;
+    const docSel = {
+      report: document.getElementById("add-report").checked,
+      review: document.getElementById("add-review").checked,
+      review_sep: document.getElementById("add-review-sep").checked,
+    };
     const statusEl = document.getElementById("add-status");
     const btn = document.getElementById("add-btn"); btn.disabled = true;
     EXTRA_PERIODS.add(period); saveExtraPeriods(); renderMatrix();
     const targets = companySel === "ALL" ? COMPANIES : [companySel];
+    // 요약줄 + 회사별 결과 누적 컨테이너 — 다음 회사 진행 메시지가 상세를 덮지 않게 분리.
+    statusEl.innerHTML = `<div id="add-status-summary"></div>
+      <div id="add-status-results" style="max-height:340px;overflow-y:auto;"></div>`;
+    const summaryEl = document.getElementById("add-status-summary");
+    const resultsEl = document.getElementById("add-status-results");
     let ok = 0;
     for (let i = 0; i < targets.length; i++) {
-      statusEl.innerHTML = `<div class="info-banner">[${i + 1}/${targets.length}] ${targets[i]}·${periodLabel(period)} 처리 중...</div>`;
-      if (await startCollect(targets[i], period, includeReport, statusEl)) ok++;  // 순차(rate-limit 회피)
+      summaryEl.innerHTML = `<div class="info-banner">[${i + 1}/${targets.length}] ${targets[i]}·${periodLabel(period)} 처리 중...</div>`;
+      const block = document.createElement("div");
+      resultsEl.appendChild(block);
+      if (await startCollect(targets[i], period, docSel, block)) ok++;  // 순차(rate-limit 회피)
+      block.scrollIntoView({ block: "nearest" });
     }
-    statusEl.innerHTML = `<div class="info-banner">완료 — ${ok}/${targets.length}개 성공 (${periodLabel(period)}).</div>`;
+    // 확인 버튼: 모달 닫기 + 라이브러리 매트릭스 갱신(closeAddModal 내 loadLibrary)
+    summaryEl.innerHTML = `<div class="info-banner" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span>완료 — ${ok}/${targets.length}개 성공 (${periodLabel(period)}).</span>
+      <button class="btn" style="background:#047857; padding:6px 18px; font-size:13px;"
+        onclick="closeAddModal()" title="라이브러리 매트릭스에 반영된 결과를 확인합니다">확인</button></div>`;
     btn.disabled = false;
   };
 
@@ -1414,7 +1606,9 @@
     const res = await fetch(`${API}/api/compare`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targets, query: q, mode, note_kind: (document.getElementById("cmp-kind")||{}).value || "전체" }),
+      body: JSON.stringify({ targets, query: q, mode,
+        note_kind: (document.getElementById("cmp-kind")||{}).value || "전체",
+        rerank: !!(document.getElementById("cmp-rerank")||{}).checked }),
     });
     const data = await res.json();
 
@@ -1446,11 +1640,21 @@
       const rows = m.candidates.map((c, j) => {
         const low = c.confidence !== "high"
           ? ' <span class="badge-low">낮은 신뢰도</span>' : '';
+        // Phase3: XBRL 계정 크로스링크 — 주석과 의미 연결된 재무 계정·금액(보조 정보)
+        const fsLinks = (c.fs_links || []).map(l => {
+          const amt = l.amount && /^-?\d+$/.test(String(l.amount))
+            ? Number(l.amount).toLocaleString("ko-KR") : (l.amount || "");
+          return `<span style="display:inline-block;background:#eef2ff;color:#3730a3;border-radius:4px;
+            padding:0 6px;margin:1px 3px 0 0;font-size:11px;" title="XBRL ${l.sj_div || ''} · 유사도 ${l.sim}">
+            💰 ${escapeHtml(l.account_nm)}${amt ? ' ' + amt : ''}</span>`;
+        }).join("");
+        const fsLine = fsLinks
+          ? `<div style="margin:2px 0 0 26px;line-height:1.7;">${fsLinks}</div>` : "";
         return `<div class="cand-row${j === 0 ? ' sel' : ''}" data-panel="${i}" data-cand="${j}"
             onclick="selectCandidate(${i}, ${j})">
           <span class="rk">${j + 1}</span>
           <span class="nm">주석 ${c.note_no} · ${escapeHtml(c.title)}</span>
-          <span class="sc">score ${c.score}${low}</span>
+          <span class="sc">score ${c.score}${low}</span>${fsLine}
         </div>`;
       }).join("");
       return `<div class="compare-panel">
@@ -1823,9 +2027,14 @@
         // 5h: 출처 칩 tooltip 에 원본 보고서명 포함(없으면 DOC_FULL)
         const orig = docOrigName(s.company, s.period, docType);
         const ttl = (orig || DOC_FULL[docType] || "") + (s.title ? " · " + s.title : "");
-        return `<div class="chip" style="cursor:pointer; background:#ede9fe; color:#5b21b6; display:block; text-align:left; border-radius:8px; padding:7px 11px;" title="${escHtml(ttl)}"
+        // Phase3: 비주석 본문 섹션 출처(no="S…")는 주석과 구분 표시
+        const isSection = String(s.note_no || "").startsWith("S");
+        const label = isSection
+          ? `📑 본문 ${escHtml(s.title || "섹션")}`
+          : `주석${s.note_no}`;
+        return `<div class="chip" style="cursor:pointer; background:${isSection ? '#ecfeff' : '#ede9fe'}; color:${isSection ? '#155e75' : '#5b21b6'}; display:block; text-align:left; border-radius:8px; padding:7px 11px;" title="${escHtml(ttl)}"
           onclick="window.open('${url}','_blank','width=1000,height=1200,scrollbars=yes,resizable=yes')">
-          <span style="font-weight:600;">${s.company}·${s.period} 주석${s.note_no} p${pg} · ${(s.score*100).toFixed(0)}%</span>${snip}</div>`;
+          <span style="font-weight:600;">${s.company}·${s.period} ${label} p${pg} · ${(s.score*100).toFixed(0)}%</span>${snip}</div>`;
       }).join("");
       h += `</div>`;
     }

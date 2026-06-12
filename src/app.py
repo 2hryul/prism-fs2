@@ -53,6 +53,7 @@ import notes_rag  # 주석 RAG(§5.4, 옵트인) — 정성 텍스트 전용, �
 import note_filters  # 주석 종류(주기/서술형) 결정론 필터
 import note_topics  # §5.2 표준 주제 매핑(임베딩 분류, AI 무경유)
 import safety  # 시크릿 마스킹·provenance 중앙화
+import sections as sections_mod  # 비주석 본문 섹션 추출(검색개선 Phase3)
 import synonyms  # 회계 동의어 쿼리 확장(BM25/lexical, 결정론)
 
 # ----------------------------------------------------------------------------
@@ -74,9 +75,17 @@ PERIOD_PATTERN = re.compile(r"^\d{4}(Q[1-4]|FY)$")
 # 매칭 임계값 (env 오버라이드 가능) — 순수 규칙, AI 미사용.
 # 단일 점수만으로는 오답/정답 구분 불가(리스→사채 0.7 vs 공정가치 0.735)하여
 # 점수 플로어 + 어휘 일치(lexical_hit) 두 신호를 함께 사용한다.
-MIN_MATCH_SCORE = float(os.getenv("MIN_MATCH_SCORE", "0.45"))  # 최소 채택 점수
-LEXICAL_FLOOR   = float(os.getenv("LEXICAL_FLOOR", "0.30"))    # 어휘 일치 시 완화 하한
+# 검색개선 Phase1: 임계 0.45→0.35 완화(재현율 우선) — UI 는 confidence 로 고/저 구분 표시.
+MIN_MATCH_SCORE = float(os.getenv("MIN_MATCH_SCORE", "0.35"))  # 최소 채택 점수
+LEXICAL_FLOOR   = float(os.getenv("LEXICAL_FLOOR", "0.28"))    # 어휘 일치 시 완화 하한
 HIGH_CONF       = float(os.getenv("HIGH_CONF", "0.65"))        # 고신뢰 하한
+
+# 검색개선 Phase1 — 결과 폭·다중 청크 가산·BM25 제목 신호 보존.
+# 기본값은 골든셋 스윕(doc\eval\eval_sweep_*.json)으로 확정: u0.8/b0.2 가
+# 제목 MRR +0.04 이면서 본문 MRR 무손실(0.818 vs 0.823)·R@5 양 레벨 개선.
+SEARCH_TOP_K  = int(os.getenv("SEARCH_TOP_K", "10"))           # compare 회사당 후보 상한(5→10)
+UNIT_MAX_W    = float(os.getenv("UNIT_MAX_W", "0.8"))          # 유닛 max 가중(잔여=상위3 평균)
+BM25_TITLE_W  = float(os.getenv("BM25_TITLE_W", "0.2"))        # BM25 제목 코퍼스 가중(잔여=청크)
 
 # B-1/B-2 (note_kind 인지 검색): 주기(회계정책·작성기준·일반사항 등 prose) 주석은 제목·본문
 # 키워드가 빈약해 BM25·lexical 신호가 약하고 XBRL 미태깅이 많다(진단 pdf_only로 확인). 따라서
@@ -86,7 +95,7 @@ COS_W_DEFAULT    = float(os.getenv("COS_W_DEFAULT", "0.7"))    # 서술형·기�
 BM_W_DEFAULT     = float(os.getenv("BM_W_DEFAULT", "0.3"))     # 서술형·기타: BM25 가중
 COS_W_POLICY     = float(os.getenv("COS_W_POLICY", "0.85"))    # 주기(정책 서술): 의미매칭 비중↑
 BM_W_POLICY      = float(os.getenv("BM_W_POLICY", "0.15"))
-POLICY_MIN_MATCH = float(os.getenv("POLICY_MIN_MATCH", "0.40"))  # 주기 채택 하한(완화)
+POLICY_MIN_MATCH = float(os.getenv("POLICY_MIN_MATCH", "0.30"))  # 주기 채택 하한(완화, Phase1 0.40→0.30)
 
 # Step 4 — 신한 인사이트(커버리지/차집합)용 상수
 # DEFAULT_TOPICS: 횡단 커버리지 매트릭스 기본 주제 목록.
@@ -127,6 +136,27 @@ try:
         USE_LOCAL_EMBED = True
 except Exception as _e:
     print(f"[warn] sentence-transformers 로드 실패 → bigram fallback 사용: {_e}")
+
+# 질의 임베딩 차원. 로컬 모델(ko-sroberta)=768, bigram 폴백=512.
+# 인덱스는 생성 시 백엔드 차원으로 고정되므로, 로드 실패로 백엔드가 바뀌면
+# 질의(512) ↔ 인덱스(768) 차원 불일치로 검색이 깨진다 → 아래 핸들러가 명확히 안내.
+EMBED_DIM = 768 if USE_LOCAL_EMBED else 512
+
+
+def _sample_index_dim() -> Optional[int]:
+    """라이브러리에서 첫 인덱스 1개의 임베딩 차원을 반환(없으면 None). 기동 경고용."""
+    try:
+        for idx_file in paths.LIBRARY_ROOT.glob("**/index*.json"):
+            data = json.loads(idx_file.read_text(encoding="utf-8"))
+            notes = data.get("notes", data) if isinstance(data, dict) else data
+            for note in (notes or []):
+                emb = note.get("embedding")
+                if emb:
+                    return len(emb)
+            return None  # 인덱스는 있으나 임베딩 부재 — 추가 탐색 불필요
+    except Exception:
+        return None
+    return None
 
 try:
     from rank_bm25 import BM25Okapi
@@ -179,6 +209,13 @@ async def lifespan(app: FastAPI):
         else "bigram fallback (저정확도)"
     ))
     print(f"[startup] BM25 하이브리드: {USE_BM25 and _HAS_BM25}")
+    # 백엔드(질의)와 기존 인덱스 차원이 어긋나면 검색이 전부 깨지므로 기동 시 선제 경고.
+    if not USE_LOCAL_EMBED:
+        idx_dim = _sample_index_dim()
+        if idx_dim and idx_dim != EMBED_DIM:
+            print(f"[CRITICAL] 임베딩 차원 불일치: 질의={EMBED_DIM}(bigram 폴백) ↔ "
+                  f"인덱스={idx_dim}. 모델 로드 실패 상태입니다. 검색이 실패합니다 — "
+                  "모델 동봉 exe로 실행하거나 sentence-transformers/모델 경로를 확인하세요.")
     ollama_ok = await check_ollama()
     print(f"[startup] Ollama LLM 보정: {'ON (' + OLLAMA_MODEL + ')' if ollama_ok else 'OFF'}")
     yield
@@ -191,6 +228,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(ValueError)
+async def _value_error_handler(request, exc: ValueError):
+    """임베딩 차원 불일치(질의 ↔ 인덱스)를 cryptic 500 대신 원인·조치를 담은 503으로 변환.
+
+    np.dot(질의 512, 인덱스 768) 등 shape 불일치는 임베딩 모델 로드 실패로 bigram(512)
+    폴백 중인데 인덱스는 모델(768)로 생성된 경우 발생한다. 그 외 ValueError 는 내부 구조
+    노출을 막기 위해 일반 500 메시지로 처리.
+    """
+    msg = str(exc)
+    if "not aligned" in msg or ("shapes" in msg and "dim" in msg):
+        backend = "local-model(768)" if USE_LOCAL_EMBED else "bigram-fallback(512)"
+        return JSONResponse(status_code=503, content={"detail": (
+            f"임베딩 차원 불일치 — 검색 인덱스와 질의 임베딩 차원이 다릅니다(현재 백엔드: {backend}, "
+            f"질의 차원: {EMBED_DIM}). 임베딩 모델(ko-sroberta) 로드 실패로 bigram(512) 폴백 중일 "
+            "가능성이 높습니다. 모델이 동봉된 setup_v*.exe 로 실행하거나, 개발 모드에서는 "
+            "sentence-transformers 설치·모델(src/models/ko-sroberta) 경로를 확인 후 서버를 재시작하세요."
+        )})
+    return JSONResponse(status_code=500, content={"detail": "내부 처리 오류가 발생했습니다."})
 
 
 
@@ -407,6 +464,12 @@ def _local_embedding_sync(text: str) -> np.ndarray:
     return _embed_model.encode(text, normalize_embeddings=True).astype(np.float32)
 
 
+def _local_embedding_batch_sync(texts: List[str]) -> np.ndarray:
+    """배치 인코딩 — 인덱싱(노트당 수십 청크)에서 단건 호출 대비 수십 배 빠름(CPU 포함)."""
+    return _embed_model.encode(texts, normalize_embeddings=True,
+                               batch_size=32).astype(np.float32)
+
+
 async def make_embedding(text: str) -> np.ndarray:
     """임베딩 생성 — 우선순위: 로컬 모델 > API > bigram fallback."""
     if USE_LOCAL_EMBED:
@@ -416,6 +479,21 @@ async def make_embedding(text: str) -> np.ndarray:
         # 실제 운영: from openai import AsyncOpenAI; ...
         return _bigram_embedding(text)
     return _bigram_embedding(text)
+
+
+async def make_embeddings(texts: List[str]) -> np.ndarray:
+    """복수 텍스트 일괄 임베딩 (인덱싱 경로 전용) — make_embedding 과 동일 백엔드."""
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    if USE_LOCAL_EMBED:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _local_embedding_batch_sync, texts)
+    return np.stack([_bigram_embedding(t) for t in texts])
+
+
+def _round_emb(vec) -> list:
+    """저장용 벡터 반올림(EMB_ROUND 자리) — JSON 크기 절감. 코사인 오차 <1e-4 (무시 가능)."""
+    return [round(float(x), EMB_ROUND) for x in vec]
 
 
 _KOREAN_TOKEN_RE = re.compile(r"[\w가-힣]+", re.UNICODE)
@@ -700,6 +778,206 @@ async def get_library():
         "total_indexed": indexed_count,
         "entries": enriched,
     }
+
+
+# ----------------------------------------------------------------------------
+# 검색개선 Phase5b — 인덱스 이식(내보내기/가져오기/rescan). GPU 없는 PC 재활용.
+# 셀 폴더는 절대경로 없는 자기완결 구조(실측) — zip 반출입 + 카탈로그 재구성으로 이식.
+# ----------------------------------------------------------------------------
+_EXPORT_EXCLUDE_DIRS = {"xbrl", "source"}  # 검색·표시에 불필요한 원본 보존물(용량 ~63%)
+
+
+def _cell_entry_from_disk(company: str, period: str) -> Optional[dict]:
+    """디스크 실파일 기준으로 카탈로그 엔트리 1건 재구성(가져오기/rescan 공용).
+
+    수집 플래그·인덱싱 카운트를 PDF/인덱스/fs_structured 존재와 인덱스 내용으로 도출.
+    셀에 의미 있는 데이터가 없으면 None(빈 디렉터리는 등록하지 않음).
+    """
+    d = entry_dir(company, period)
+    if not d.exists():
+        return None
+    entry: Dict[str, Any] = {}
+    meta_path = d / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            entry["rcept_no"] = meta.get("rcept_no")
+            entry["report_nm"] = meta.get("report_nm")
+        except (OSError, json.JSONDecodeError):
+            pass  # meta 손상 — 파일 기준 플래그만으로 진행
+    entry["report_collected"] = pdf_path(company, period, "report").exists()
+    entry["review_collected"] = pdf_path(company, period, "review").exists()
+    entry["review_sep_collected"] = pdf_path(company, period, "review_sep").exists()
+    entry["fs_collected"] = (d / "fs_structured.json").exists()
+
+    has_any = any(entry.get(k) for k in ("report_collected", "review_collected",
+                                         "review_sep_collected", "fs_collected"))
+    for dt, prefix in (("report", ""), ("review", "review_"),
+                       ("review_sep", "review_sep_")):
+        ip = index_path(company, period, dt)
+        if not ip.exists():
+            continue
+        try:
+            idx = json.loads(ip.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        notes = idx.get("notes", [])
+        n_conn = sum(1 for n in notes if n.get("fs_div") == "연결")
+        n_sep = sum(1 for n in notes if n.get("fs_div") == "별도")
+        entry[f"{prefix}indexed" if prefix else "indexed"] = True
+        entry[f"{prefix}notes_count"] = len(notes)
+        entry[f"{prefix}notes_count_연결"] = n_conn
+        entry[f"{prefix}notes_count_별도"] = n_sep
+        entry[f"{prefix}source_type"] = idx.get("source_type")
+        entry[f"{prefix}detected_unit"] = idx.get("detected_unit")
+        has_any = True
+    return entry if has_any else None
+
+
+@app.post("/api/library/rescan")
+async def rescan_library():
+    """디스크 스캔으로 카탈로그 재구성 — 폴더 복사/수동 작업 후 매트릭스 복원용."""
+    old = {(e["company"], e["period"]): e for e in load_catalog()["entries"]}
+    entries = []
+    for cell_dir in sorted(LIBRARY_ROOT.glob("*/*")):
+        company, period = cell_dir.parent.name, cell_dir.name
+        try:
+            validate_company(company)
+            validate_period(period)
+        except HTTPException:
+            continue  # 규격 외 디렉터리 무시
+        e = _cell_entry_from_disk(company, period)
+        if e is None:
+            continue
+        prev = old.get((company, period), {})
+        if prev.get("collected_at"):
+            e["collected_at"] = prev["collected_at"]
+        entries.append({"company": company, "period": period, **e})
+    save_catalog({"entries": entries})
+    return {"cells": len(entries)}
+
+
+@app.get("/api/library/export")
+async def export_library(cells: Optional[str] = None, include_raw: bool = False):
+    """라이브러리 셀들을 이식용 zip 으로 내보내기(+manifest — 가져오기 검증용).
+
+    include_raw=False(기본): xbrl/·source/ 원본 보존물 제외 — 검색·뷰어 동작에 불필요,
+    반입 용량 대폭 절감. 검색 인덱스·PDF·재무데이터·meta 는 포함.
+    """
+    import tempfile
+    import zipfile
+    from starlette.background import BackgroundTask
+
+    if cells:
+        targets = []
+        for c in cells.split(","):
+            comp, _, per = c.strip().partition("/")
+            targets.append((validate_company(comp), validate_period(per)))
+    else:
+        targets = [(d.parent.name, d.name) for d in sorted(LIBRARY_ROOT.glob("*/*"))
+                   if d.is_dir()]
+    manifest = {
+        "app": "prism-fs",
+        "schema": INDEX_SCHEMA,
+        "embed_dim": EMBED_DIM,
+        "embed_backend": "local-model" if USE_LOCAL_EMBED else "bigram",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "include_raw": include_raw,
+        "cells": [f"{c}/{p}" for c, p in targets],
+    }
+    tmp = tempfile.NamedTemporaryFile(prefix="prism_export_", suffix=".zip",
+                                      delete=False)
+    tmp.close()
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
+        for comp, per in targets:
+            d = entry_dir(comp, per)
+            if not d.exists():
+                continue
+            for f in d.rglob("*"):
+                if not f.is_file():
+                    continue
+                rel = f.relative_to(LIBRARY_ROOT)
+                if not include_raw and _EXPORT_EXCLUDE_DIRS & set(rel.parts):
+                    continue
+                zf.write(f, str(rel).replace("\\", "/"))
+    fname = f"prism_library_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
+    return FileResponse(tmp.name, filename=fname, media_type="application/zip",
+                        background=BackgroundTask(os.unlink, tmp.name))
+
+
+def _validate_zip_member(name: str) -> Optional[tuple]:
+    """zip 멤버 경로 검증 — (company, period) 반환, 셀 파일이 아니거나 위험하면 None.
+
+    경로 탈출(..·절대경로·드라이브) 차단(보안 규칙). manifest.json 등 루트 파일은 None.
+    """
+    norm = name.replace("\\", "/")
+    if norm.startswith("/") or ".." in norm.split("/") or ":" in norm:
+        return None
+    parts = norm.split("/")
+    if len(parts) < 3:
+        return None  # 루트 파일(manifest 등) — 셀 콘텐츠 아님
+    company, period = parts[0], parts[1]
+    if company not in VALID_COMPANIES or not PERIOD_PATTERN.match(period):
+        return None
+    return company, period
+
+
+def _import_zip_blocking(zip_file: Path, overwrite: bool) -> dict:
+    """이식 zip 반입 코어(동기) — manifest 검증 + 셀 단위 병합 + 카탈로그 등록."""
+    import zipfile
+    with zipfile.ZipFile(zip_file) as zf:
+        names = zf.namelist()
+        if "manifest.json" not in names:
+            raise HTTPException(400, "manifest.json 이 없는 zip — prism-fs 내보내기 파일이 아닙니다.")
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        dim = manifest.get("embed_dim")
+        if dim and dim != EMBED_DIM:
+            raise HTTPException(400, (
+                f"임베딩 차원 불일치 — 반입 인덱스 {dim} ↔ 현재 백엔드 {EMBED_DIM}. "
+                "동일 임베딩 모델(ko-sroberta 동봉 exe) 환경에서 가져오세요."))
+
+        by_cell: Dict[tuple, list] = {}
+        for n in names:
+            cell = _validate_zip_member(n)
+            if cell and not n.endswith("/"):
+                by_cell.setdefault(cell, []).append(n)
+
+        imported, skipped = [], []
+        for (company, period), members in sorted(by_cell.items()):
+            dest = entry_dir(company, period)
+            if dest.exists() and any(dest.iterdir()) and not overwrite:
+                skipped.append(f"{company}/{period}")
+                continue
+            for m in members:
+                target = LIBRARY_ROOT / Path(m.replace("/", os.sep))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(m) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            e = _cell_entry_from_disk(company, period)
+            if e:
+                upsert_catalog_entry(company, period, **e)
+            imported.append(f"{company}/{period}")
+        return {"imported": imported, "skipped": skipped,
+                "manifest_schema": manifest.get("schema")}
+
+
+@app.post("/api/library/import")
+async def import_library(file: UploadFile = File(...),
+                         overwrite: bool = Form(False)):
+    """이식 zip 가져오기 — 차원/스키마/경로 검증 후 셀 병합 + 카탈로그 자동 등록."""
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(prefix="prism_import_", suffix=".zip",
+                                      delete=False)
+    try:
+        shutil.copyfileobj(file.file, tmp)
+        tmp.close()
+        return await asyncio.to_thread(_import_zip_blocking, Path(tmp.name), overwrite)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
 
 
 # 주의: 파라미터 라우트(/{company}/{period})보다 먼저 선언해야 함.
@@ -1060,13 +1338,16 @@ def _annotate_notes(doc, notes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # Phase A: 본문 청크 파라미터. 인덱스 비대 방지 위해 노트당 청크·페이지 상한.
-CHUNK_CHARS = 450          # 청크 목표 길이(자)
-CHUNK_OVERLAP = 80         # 청크 간 겹침(경계 문맥 보존)
-MAX_CHUNKS_PER_NOTE = 40   # 노트당 청크 상한(인덱스 용량 통제)
-MAX_CHUNKS_PER_PAGE = 3    # 페이지당 청크 상한 — 긴 노트가 앞 페이지에서 예산을 소진하지 않고
+# 검색개선 Phase2: 청크 450→250자 — 임베딩 모델(ko-sroberta) max_seq_length=128토큰에
+# 정합(450자는 모델이 뒷부분 ~절반을 무음 절단했음). 페이지 스캔 캡 제거 + 노트당
+# 상한 완화로 장문 주석(금융상품 위험 등 20p+) 전 범위 커버. 용량은 벡터 반올림으로 상쇄.
+CHUNK_CHARS = 250          # 청크 목표 길이(자)
+CHUNK_OVERLAP = 50         # 청크 간 겹침(경계 문맥 보존)
+MAX_CHUNKS_PER_NOTE = 120  # 노트당 청크 상한(인덱스 용량 통제, 40→120)
+MAX_CHUNKS_PER_PAGE = 4    # 페이지당 청크 상한 — 긴 노트가 앞 페이지에서 예산을 소진하지 않고
                            # 전 페이지 범위에 고르게 분산되도록(긴 주석 커버리지↑)
-CHUNK_SCAN_PAGE_CAP = 20   # 청크 스캔 페이지 상한
-INDEX_SCHEMA = 2           # 청크 인덱싱 스키마 버전(구 인덱스=1/부재 → 제목-only 폴백)
+INDEX_SCHEMA = 3           # 인덱싱 스키마 버전(3: 250자 청크·full_text·반올림 벡터. 구버전 호환 읽기)
+EMB_ROUND = 5              # 인덱스 저장 벡터 소수점 자릿수 — JSON 크기 ~45%↓, 코사인 오차 <1e-4
 
 
 def _chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> List[str]:
@@ -1088,11 +1369,12 @@ def _note_chunks(doc, page_start: int, page_end: int) -> List[Dict[str, Any]]:
     """노트 페이지 범위를 페이지-정확 청크로 분할(각 청크에 실제 page 보존 → 인용 정밀화).
 
     반환: [{text, page}] (임베딩·토큰은 index_entry 에서 부착). 노트당 상한 적용.
+    Phase2: 페이지 스캔 캡(구 20p) 제거 — 노트 전 범위 스캔(장문 주석 뒷부분 누락 해소).
     """
     if not page_start:
         return []
     out: List[Dict[str, Any]] = []
-    last = min(page_start + CHUNK_SCAN_PAGE_CAP - 1, page_end or page_start, doc.page_count)
+    last = min(page_end or page_start, doc.page_count)
     for p in range(page_start, last + 1):
         if not (1 <= p <= doc.page_count):
             continue
@@ -1107,6 +1389,27 @@ def _note_chunks(doc, page_start: int, page_end: int) -> List[Dict[str, Any]]:
             if per_page >= MAX_CHUNKS_PER_PAGE:
                 break  # 이 페이지 할당량 소진 → 다음 페이지로(긴 노트 전 범위 커버)
     return out
+
+
+_FULL_TEXT_CAP = 200_000  # 노트 전문 저장 상한(자) — 비정상 페이지 범위 방어
+
+
+def _note_full_text(doc, page_start: int, page_end: int) -> str:
+    """노트 페이지 범위의 본문 전문(공백 정규화) — RAG 컨텍스트·스니펫용. 임베딩 없음."""
+    if not page_start:
+        return ""
+    last = min(page_end or page_start, doc.page_count)
+    parts = []
+    total = 0
+    for p in range(page_start, last + 1):
+        if not (1 <= p <= doc.page_count):
+            continue
+        t = re.sub(r"[ \t]+", " ", doc[p - 1].get_text() or "").strip()
+        parts.append(t)
+        total += len(t)
+        if total >= _FULL_TEXT_CAP:
+            break
+    return "\n".join(parts)[:_FULL_TEXT_CAP]
 
 
 def extract_notes_heuristic(pdf_path: Path, default_fs_div: str = "연결"):
@@ -1239,16 +1542,19 @@ async def embed_and_write_index(company, period, doc_type, notes, detected_unit,
     with fitz.open(src_pdf) as doc:
         total_pages = doc.page_count
         for i, note in enumerate(notes):
-            emb = await make_embedding(note["title"])
-            note["embedding"] = emb.tolist()
-            note["tokens"] = tokenize_korean(note["title"])
             # 본문 청크: 각 청크 임베딩+토큰(페이지 보존 → 인용 정밀)
             chunks = _note_chunks(doc, note.get("page_start"), note.get("page_end"))
-            for ch in chunks:
-                ce = await make_embedding(ch["text"])
-                ch["embedding"] = ce.tolist()
+            # Phase2: 제목+청크 일괄 배치 임베딩(단건 호출 대비 수십 배 — 재인덱싱 현실화)
+            embs = await make_embeddings([note["title"]] + [ch["text"] for ch in chunks])
+            note["embedding"] = _round_emb(embs[0])
+            note["tokens"] = tokenize_korean(note["title"])
+            for ch, ce in zip(chunks, embs[1:]):
+                ch["embedding"] = _round_emb(ce)
                 ch["tokens"] = tokenize_korean(ch["text"])
             note["chunks"] = chunks
+            # Phase2: 본문 전문 보존(검색 스니펫·RAG 컨텍스트용 — 임베딩 없음, 텍스트만)
+            note["full_text"] = _note_full_text(doc, note.get("page_start"),
+                                                note.get("page_end"))
             if progress_cb:
                 progress_cb((i + 1) / max(len(notes), 1))
 
@@ -1370,6 +1676,118 @@ async def index_entry(company: str, period: str, doc_type: str = "report"):
         "detected_unit": res["detected_unit"],
     }
 
+    # Phase3: report 인덱싱 후 부가 인덱스 자동 생성 — 실패해도 주석 인덱싱은 유효(무회귀).
+    if dt == "report":
+        try:
+            sec = await build_sections_index(company, period)
+            INDEX_STATUS[key]["sections"] = sec.get("sections", 0)
+        except Exception as e:
+            print(f"[index_entry] 섹션 인덱스 생성 실패({type(e).__name__}) — 주석 인덱스는 유효", file=sys.stderr)
+        try:
+            xl = await build_xbrl_links(company, period)
+            INDEX_STATUS[key]["xbrl_links"] = xl.get("linked_notes", 0)
+        except Exception as e:
+            print(f"[index_entry] XBRL 크로스링크 생성 실패({type(e).__name__})", file=sys.stderr)
+
+
+# ----------------------------------------------------------------------------
+# 검색개선 Phase3 — ① 비주석 본문 섹션 인덱스 ② XBRL 계정↔주석 크로스링크
+# ----------------------------------------------------------------------------
+def sections_index_path(company: str, period: str) -> Path:
+    return entry_dir(company, period) / "index_sections.json"
+
+
+def xbrl_links_path(company: str, period: str) -> Path:
+    return entry_dir(company, period) / "xbrl_links.json"
+
+
+async def build_sections_index(company: str, period: str) -> dict:
+    """report.pdf 의 비주석 본문(재무제표 본표·MD&A·사업내용 등)을 섹션 단위로 인덱싱.
+
+    주석 인덱스가 커버한 페이지는 제외(중복 결과 방지) — 섹션 인덱스는 '주석 밖'
+    콘텐츠 전용 보완 축. RAG(/api/notes/rag) 검색에 합류한다.
+    """
+    src = pdf_path(company, period, "report")
+    if not src.exists():
+        return {"sections": 0}
+    idx = _load_index(company, period, "report") or {}
+    covered = sections_mod.covered_pages_from_notes(idx.get("notes"))
+    out_secs, total_chunks = [], 0
+    with fitz.open(src) as doc:
+        for s in sections_mod.extract_sections(doc):
+            chunks = sections_mod.plan_section_chunks(doc, s, covered, _chunk_text)
+            if not chunks:
+                continue  # 전 페이지가 주석 커버 → 섹션 항목 불필요
+            embs = await make_embeddings([s["title"]] + [c["text"] for c in chunks])
+            sec = {**s, "section": True,
+                   "embedding": _round_emb(embs[0]),
+                   "tokens": tokenize_korean(s["title"])}
+            for ch, ce in zip(chunks, embs[1:]):
+                ch["embedding"] = _round_emb(ce)
+                ch["tokens"] = tokenize_korean(ch["text"])
+            sec["chunks"] = chunks
+            total_chunks += len(chunks)
+            out_secs.append(sec)
+    sections_index_path(company, period).write_text(json.dumps({
+        "company": company, "period": period, "schema": INDEX_SCHEMA,
+        "sections": out_secs,
+    }, ensure_ascii=False), encoding="utf-8")
+    return {"sections": len(out_secs), "chunks": total_chunks}
+
+
+XBRL_LINK_MIN_SIM = float(os.getenv("XBRL_LINK_MIN_SIM", "0.55"))  # 계정↔주석 연결 하한
+_XBRL_DIV_MAP = {"CFS": "연결", "OFS": "별도"}
+
+
+async def build_xbrl_links(company: str, period: str) -> dict:
+    """fs_structured 계정명 ↔ 주석 제목 임베딩 매칭 → xbrl_links.json.
+
+    검색 결과 카드에 '관련 재무수치'를 보강 표시하기 위한 오프라인 1회 연결.
+    키: "{fs_div}:{note_no}" → [{account_nm, sj_div, amount, sim}] (상위 3).
+    """
+    fs_file = entry_dir(company, period) / "fs_structured.json"
+    idx = _load_index(company, period, "report")
+    if not fs_file.exists() or not idx:
+        return {"linked_notes": 0}
+    fs = json.loads(fs_file.read_text(encoding="utf-8"))
+    links: Dict[str, list] = {}
+    for fs_code, fs_div in _XBRL_DIV_MAP.items():
+        accounts = (fs.get("by_fs_div", {}).get(fs_code) or {}).get("accounts") or []
+        uniq: Dict[str, dict] = {}
+        for a in accounts:
+            nm = (a.get("account_nm") or "").strip()
+            if nm and nm not in uniq:
+                uniq[nm] = {"account_nm": nm, "sj_div": a.get("sj_div"),
+                            "amount": a.get("thstrm_amount")}
+        names = list(uniq)
+        notes = [n for n in idx.get("notes", [])
+                 if n.get("fs_div") == fs_div and n.get("embedding")]
+        if not names or not notes:
+            continue
+        acc_embs = await make_embeddings(names)  # 정규화 벡터 → dot=cosine
+        for n in notes:
+            sims = acc_embs @ np.asarray(n["embedding"], dtype=np.float32)
+            order = np.argsort(-sims)[:3]
+            top = [{**uniq[names[j]], "sim": round(float(sims[j]), 3)}
+                   for j in order if sims[j] >= XBRL_LINK_MIN_SIM]
+            if top:
+                links[f"{fs_div}:{n['no']}"] = top
+    xbrl_links_path(company, period).write_text(
+        json.dumps({"company": company, "period": period, "links": links},
+                   ensure_ascii=False), encoding="utf-8")
+    return {"linked_notes": len(links)}
+
+
+def _load_xbrl_links(company: str, period: str) -> dict:
+    """xbrl_links.json 의 links dict 로드(없으면 빈 dict)."""
+    p = xbrl_links_path(company, period)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("links", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
 
 @app.post("/api/library/index/{company}/{period}")
 async def start_index(company: str, period: str, background: BackgroundTasks,
@@ -1406,7 +1824,7 @@ def _safe_err(e: Exception) -> str:
 
 
 def _collect_company_blocking(company: str, year: int, reprt: str,
-                              period: str, want_report: bool) -> dict:
+                              period: str, include: dict) -> dict:
     """blocking DART 수집(httpx 동기) — asyncio.to_thread 로 실행.
 
     corp_code 해결(라이브 corpCode→실패 시 캐시/시드) 후 collect_company 호출.
@@ -1430,25 +1848,88 @@ def _collect_company_blocking(company: str, year: int, reprt: str,
             except Exception:
                 odr = None  # review/report 첨부만 스킵, 나머지 수집은 진행
         return cdart.collect_company(client, api_key, company, corp_code, year, reprt,
-                                     period, odr=odr, collect_report=want_report)
+                                     period, odr=odr,
+                                     collect_report=include.get("report", True),
+                                     collect_review=include.get("review", True),
+                                     collect_review_sep=include.get("review_sep", True))
 
 
-async def _collect_and_index(company: str, period: str, want_report: bool):
+def _doc_detail(company: str, period: str, d: dict) -> dict:
+    """meta.documents[] 1건 → 수집 상태 표시용 상세 1건.
+
+    수집 여부는 *_collected 플래그가 아닌 디스크 실파일 기준(무클로버 재수집 시
+    플래그=False 여도 기존 PDF 가 존재·인덱싱되므로). 인덱싱 수치는 직전
+    index_entry 가 남긴 INDEX_STATUS 에서 읽어 카탈로그 재독을 피한다.
+
+    existing: 디스크엔 있으나 이번 런이 받은 게 아닌 파일(무클로버 스킵/합성 항목).
+    이번 런 수집 여부는 meta 항목에 fetch 결과 필드(file/filename_dart)가 있는지로 판정
+    — UI 가 "수집 ✓(신규)" 대신 "보유"로 구분 표시(이번 런 결과로 오인 방지).
+    """
+    dt = d.get("doc_type")
+    ist = INDEX_STATUS.get(f"{company}/{period}/{dt}", {})
+    collected = pdf_path(company, period, dt).exists() if dt else False
+    fetched_this_run = bool(d.get("file") or d.get("filename_dart"))
+    # 무클로버 재수집은 meta 에 file 이 비어도 디스크엔 표준 작업본이 있음 → 표준명 폴백.
+    saved = d.get("file") or (pdf_path(company, period, dt).name if collected else None)
+    orig = d.get("filename_original") or original_pdf_name(company, period, dt)
+    return {
+        "doc_type": dt,
+        "filename_dart": d.get("filename_dart"),
+        "filename_original": orig,
+        "file": saved,
+        "renamed": bool(saved and orig and saved != orig),
+        "collected": collected,
+        "existing": collected and not fetched_this_run,
+        "manual_upload_required": (dt == "report" and not collected
+                                   and d.get("display_pdf") == "manual_upload_required"),
+        "indexed": ist.get("status") == "done",
+        "notes_count": ist.get("notes_extracted"),
+        "detected_unit": ist.get("detected_unit"),
+    }
+
+
+def _collect_details(company: str, period: str, meta: dict) -> dict:
+    """수집 done/error 상태에 첨부할 상세 — 문서별 파일명·인덱싱, 재무 fs_div, 저장경로.
+
+    meta.documents[] 는 이번 런에서 새로 받은 문서만 담는다(무클로버 스킵분 누락).
+    디스크에 작업본이 있는 문서유형은 합성 항목으로 보강해 인덱싱 현황까지 빠짐없이 표시.
+    """
+    docs = {d.get("doc_type"): _doc_detail(company, period, d)
+            for d in (meta.get("documents") or []) if d.get("doc_type")}
+    for dt in VALID_DOC_TYPES:
+        if dt not in docs and pdf_path(company, period, dt).exists():
+            docs[dt] = _doc_detail(company, period, {"doc_type": dt})
+    order = {"report": 0, "review_sep": 1, "review": 2}
+    return {
+        "documents": sorted(docs.values(), key=lambda x: order.get(x["doc_type"], 9)),
+        "fs_divs": meta.get("fs_divs") or [],
+        "fetch_failures": meta.get("fetch_failures") or {},
+        # 공시 뷰어 링크는 데이터로 전달 — index.html 에 외부 호스트 하드코딩 금지(폐쇄망 게이트).
+        "viewer_url": (cdart.dart_viewer_url(meta["rcept_no"])
+                       if meta.get("rcept_no") else None),
+        "path": str(entry_dir(company, period)),
+    }
+
+
+async def _collect_and_index(company: str, period: str, include: dict):
     """백그라운드: DART 수집(스레드) → 카탈로그 등록 → 확보된 표시용 PDF 자동 인덱싱.
 
+    - include: 사용자가 선택한 수집 문서 {"report","review","review_sep" → bool}.
+      재무데이터(XBRL)는 선택과 무관하게 항상 수집된다.
     - 카탈로그 등록은 인덱싱 성공과 분리한다. 본문 PDF 를 못 받아도(재무데이터=XBRL 만
       수집) 라이브러리에 등록돼야 한다(과거: 인덱싱 0건이면 미등록 → 셀이 빈칸으로 남음).
-    - 인덱싱은 불안정한 *_collected 플래그가 아니라 '디스크에 실제 존재하는 PDF' 기준으로
-      수행한다(이전 수집/수동 업로드분 + review_sep 까지 누락 없이 인덱싱).
+    - 인덱싱은 불안정한 *_collected 플래그가 아니라 '디스크에 실제 존재하는 PDF' 기준,
+      단 사용자가 선택한 문서유형만(미선택 문서의 불필요한 재인덱싱 방지).
     """
     key = f"{company}/{period}"
     COLLECT_STATUS[key] = {"status": "running", "stage": "collecting"}
     try:
         year, reprt = _period_to_year_reprt(period)
         meta = await asyncio.to_thread(_collect_company_blocking, company, year, reprt,
-                                       period, want_report)
+                                       period, include)
     except Exception as e:
-        COLLECT_STATUS[key] = {"status": "error", "error": _safe_err(e)}
+        COLLECT_STATUS[key] = {"status": "error", "error": _safe_err(e),
+                               "requested": include}
         return
 
     report_ok = bool(meta.get("report_collected"))
@@ -1475,17 +1956,20 @@ async def _collect_and_index(company: str, period: str, want_report: bool):
                            "report_collected": report_ok, "review_collected": review_ok,
                            "review_sep_collected": review_sep_ok}
 
-    # (2) 디스크에 존재하는 표시용 PDF 인덱싱(플래그가 아닌 실제 파일 기준 — review_sep 포함).
+    # (2) 디스크에 존재하는 표시용 PDF 인덱싱 — 사용자가 선택한 문서유형만.
     indexed: List[str] = []
     try:
         for dt in ("report", "review", "review_sep"):
-            if pdf_path(company, period, dt).exists():
+            if include.get(dt, True) and pdf_path(company, period, dt).exists():
                 await index_entry(company, period, dt)
                 indexed.append(dt)
     except Exception as e:
+        # 인덱싱 실패여도 수집·카탈로그 등록은 끝난 상태 — 부분 성공 문서 상세를 함께 노출.
         COLLECT_STATUS[key] = {"status": "error", "error": _safe_err(e),
                                "report_collected": report_ok, "review_collected": review_ok,
-                               "review_sep_collected": review_sep_ok}
+                               "review_sep_collected": review_sep_ok,
+                               "requested": include,
+                               **_collect_details(company, period, meta)}
         return
 
     COLLECT_STATUS[key] = {
@@ -1497,13 +1981,17 @@ async def _collect_and_index(company: str, period: str, want_report: bool):
         "indexed": indexed,
         "rcept_no": meta.get("rcept_no"),
         "report_nm": meta.get("report_nm"),
+        "requested": include,
+        **_collect_details(company, period, meta),
     }
 
 
 class CollectPayload(BaseModel):
     company: str
     period: str
-    include_report_pdf: bool = True
+    include_report_pdf: bool = True       # 본문 보고서(분기/반기/사업보고서) PDF
+    include_review: bool = True           # 연결재무제표 검토보고서
+    include_review_sep: bool = True       # 별도재무제표 검토보고서
 
 
 @app.post("/api/library/collect")
@@ -1517,7 +2005,9 @@ async def start_collect(payload: CollectPayload, background: BackgroundTasks):
     if COLLECT_STATUS.get(key, {}).get("status") in ("running", "indexing"):
         raise HTTPException(409, "이미 수집이 진행 중입니다.")
     COLLECT_STATUS[key] = {"status": "running", "stage": "queued"}
-    background.add_task(_collect_and_index, company, period, payload.include_report_pdf)
+    include = {"report": payload.include_report_pdf, "review": payload.include_review,
+               "review_sep": payload.include_review_sep}
+    background.add_task(_collect_and_index, company, period, include)
     return {"status": "running", "company": company, "period": period}
 
 
@@ -1538,12 +2028,64 @@ class ComparePayload(BaseModel):
     query: str
     mode: Literal["topic", "number"] = "topic"
     note_kind: Optional[Literal["전체", "주기", "서술형"]] = "전체"  # 주석 종류 필터
+    rerank: bool = False  # Phase4: Ollama 후보 재정렬 옵트인(가용 시에만, 실패 무시)
 
 
 def cosine(a, b):
     a, b = np.array(a), np.array(b)
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1.0
     return float(np.dot(a, b) / denom)
+
+
+SEARCH_RERANK_TIMEOUT = float(os.getenv("SEARCH_RERANK_TIMEOUT", "6.0"))
+
+
+async def llm_rerank_candidates(query: str, candidates: list) -> list:
+    """검색개선 Phase4 — Ollama 로 후보 '순서만' 재조정(점수·메타 불변, 옵트인).
+
+    임베딩이 놓치는 의미 관계(용어 변형 등)를 LLM 판단으로 보정한다.
+    할루시네이션 차단: LLM 은 기존 후보의 note_no 배열만 반환 — 새 항목 추가 불가.
+    실패/타임아웃/비가용 시 원본 순서 그대로(무회귀).
+    """
+    if not _OLLAMA_AVAILABLE or len(candidates) < 3:
+        return candidates
+    items = [{"no": c["note_no"], "title": c["title"]} for c in candidates]
+    prompt = f"""한국 금융지주 재무제표 주석 검색 후보를 질의 관련성 순으로 재정렬하는 도구입니다.
+
+질의: {query}
+후보: {json.dumps(items, ensure_ascii=False)}
+
+규칙: 위 후보의 no 값만 사용하세요. 관련성이 높은 순서의 no 배열(JSON)만 반환. 설명 금지.
+형식: [3, 17, 1]"""
+    try:
+        async with httpx.AsyncClient(timeout=SEARCH_RERANK_TIMEOUT) as client:
+            res = await client.post(f"{OLLAMA_URL}/api/generate", json={
+                "model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.0, "num_predict": 200, "top_p": 1.0}})
+            res.raise_for_status()
+            text = res.json().get("response", "").strip()
+        m = re.search(r"\[[\d,\s]*\]", text)
+        if not m:
+            return candidates
+        order = [n for n in json.loads(m.group()) if isinstance(n, int)]
+        if not order:
+            return candidates
+        # note_no 순서로 재배열 — 미언급 후보는 기존 순서대로 뒤에 보존(누락 금지).
+        remaining = list(candidates)
+        out = []
+        for no in order:
+            hit = next((c for c in remaining if c["note_no"] == no), None)
+            if hit is not None:
+                out.append(hit)
+                remaining.remove(hit)
+        out.extend(remaining)
+        for c in out:
+            c["reranked"] = True  # UI 표시용 — AI 개입 투명화
+        return out
+    except Exception as e:
+        print(f"[llm_rerank] 실패(무시 — 기존 순서 유지): {type(e).__name__}", file=sys.stderr)
+        return candidates
 
 
 def _notes_for_comparison(idx: dict, fs_div: str = "연결") -> list:
@@ -1564,17 +2106,25 @@ def _notes_for_comparison(idx: dict, fs_div: str = "연결") -> list:
 
 
 def _note_unit_cos(q_emb, note: dict):
-    """노트 제목 + 본문청크 중 질의와 최고 cosine 및 그 page(인용 정밀). 구 인덱스는 제목만."""
-    best = cosine(q_emb, note["embedding"]) if note.get("embedding") else -1.0
-    page = note.get("page_start")
+    """노트 유닛(제목+본문청크) cosine — max(0.6) + 상위3 평균(0.4) 혼합 점수와 최고 페이지.
+
+    Phase1: max-only 는 여러 청크가 고르게 매칭돼도 가산이 없어 다중 근거 노트가
+    단발 스파이크 노트와 동점이 됐다 → 상위3 평균을 섞어 매칭 폭을 반영.
+    유닛 1개(구 인덱스 제목만/청크 없음)면 평균=최댓값이라 기존 점수와 동일(무회귀).
+    """
+    units = []
+    if note.get("embedding"):
+        units.append((cosine(q_emb, note["embedding"]), note.get("page_start")))
     for ch in note.get("chunks", []):
         e = ch.get("embedding")
-        if not e:
-            continue
-        s = cosine(q_emb, e)
-        if s > best:
-            best, page = s, ch.get("page", page)
-    return best, page
+        if e:
+            units.append((cosine(q_emb, e), ch.get("page", note.get("page_start"))))
+    if not units:
+        return -1.0, note.get("page_start")
+    units.sort(key=lambda u: -u[0])
+    best, page = units[0]
+    top3 = [s for s, _ in units[:3]]
+    return UNIT_MAX_W * best + (1.0 - UNIT_MAX_W) * (sum(top3) / len(top3)), page
 
 
 def _score_notes_for_query(q_emb, q_text: str, notes_with_emb: list) -> list:
@@ -1604,15 +2154,28 @@ def _score_notes_for_query(q_emb, q_text: str, notes_with_emb: list) -> list:
     q_text_exp = synonyms.expand_query(q_text)
 
     if USE_BM25 and _HAS_BM25:
-        corpus = []
+        # Phase1: 제목/청크 코퍼스 분리 — 합본 코퍼스에선 제목 토큰(~5개)이 청크
+        # 토큰(수백 개)에 희석돼 제목 고신호가 묻혔다. 각각 정규화 후 가중 결합.
+        title_corpus, chunk_corpus = [], []
         for n in notes_with_emb:
-            toks = list(n.get("tokens") or tokenize_korean(n["title"]))
+            t = list(n.get("tokens") or tokenize_korean(n["title"]))
+            c: list = []
             for ch in n.get("chunks", []):
-                toks.extend(ch.get("tokens") or [])
-            corpus.append(toks or tokenize_korean(n["title"]))
-        bm25 = BM25Okapi(corpus)
-        bm_scores = bm25.get_scores(tokenize_korean(q_text_exp))
-        bm_norm = bm_scores / max(bm_scores.max(), 1e-9)
+                c.extend(ch.get("tokens") or [])
+            title_corpus.append(t or ["_"])
+            chunk_corpus.append(c or t or ["_"])
+        q_toks = tokenize_korean(q_text_exp)
+
+        def _bm_norm(arr):
+            # BM25Okapi 는 소코퍼스에서 음수 점수를 낼 수 있다 — 음수를 0으로 클립 후
+            # max>0 일 때만 정규화(기존 max(…,1e-9) 나눗셈은 음수를 수백만 배 증폭).
+            arr = np.clip(arr, 0.0, None)
+            m = arr.max()
+            return arr / m if m > 0 else arr
+
+        bm_t = _bm_norm(BM25Okapi(title_corpus).get_scores(q_toks))
+        bm_c = _bm_norm(BM25Okapi(chunk_corpus).get_scores(q_toks))
+        bm_norm = BM25_TITLE_W * bm_t + (1.0 - BM25_TITLE_W) * bm_c
         # B-1: note_kind 별 하이브리드 가중 — 주기(정책 서술)는 임베딩 비중↑, 서술형은 현행.
         kinds = [note_filters.note_kind(n.get("title", "")) for n in notes_with_emb]
         w_cos = np.array([COS_W_POLICY if k == "주기" else COS_W_DEFAULT for k in kinds])
@@ -1635,6 +2198,7 @@ def _score_notes_for_query(q_emb, q_text: str, notes_with_emb: list) -> list:
         out.append({
             "note_no": n["no"],
             "title": n["title"],
+            "fs_div": n.get("fs_div"),  # 후보 자체의 연결/별도(타깃 all 검색 시 구분용)
             "page_start": n["page_start"],
             "page_end": n["page_end"],
             "match_page": match_pages[i],
@@ -1740,8 +2304,21 @@ async def compare(payload: ComparePayload):
                 missing.append({"company": target.company, "period": target.period,
                                 "doc_type": target.doc_type, "reason": "no embeddings"})
                 continue
-            # top-5 후보(낮은 신뢰도 포함). below_threshold 라도 missing 으로 보내지 않음.
-            candidates = rank_notes_for_query(q_emb, payload.query, notes_with_emb, k=5)
+            # top-k 후보(낮은 신뢰도 포함). below_threshold 라도 missing 으로 보내지 않음.
+            candidates = rank_notes_for_query(q_emb, payload.query, notes_with_emb,
+                                              k=SEARCH_TOP_K)
+            # Phase4: LLM 재정렬(옵트인) — 순서만 조정, 실패 시 무시.
+            if payload.rerank:
+                candidates = await llm_rerank_candidates(payload.query, candidates)
+
+        # Phase3: XBRL 계정 크로스링크 부착 — 결과 카드에 관련 재무수치 보강(없으면 생략).
+        # 키의 fs_div 는 후보 노트 자체 값 우선(타깃 fs_div="all" 검색 시 연결/별도 혼재).
+        xlinks = _load_xbrl_links(target.company, target.period)
+        if xlinks:
+            for c in candidates:
+                fl = xlinks.get(f"{c.get('fs_div') or target.fs_div}:{c.get('note_no')}")
+                if fl:
+                    c["fs_links"] = fl
 
         matches.append({
             "company": target.company,
@@ -2203,8 +2780,9 @@ async def notes_compare_memo(topic: str, period: str, fs_div: str = "연결",
 @app.get("/api/notes/rag")
 async def notes_rag_query(q: str, fs_div: str = "연결",
                           companies: Optional[str] = None,
-                          period: Optional[str] = None, top_k: int = 5,
+                          period: Optional[str] = None, top_k: int = SEARCH_TOP_K,
                           note_kind: str = "전체", generate: bool = True,
+                          include_sections: bool = True,
                           doc_type: Literal["report", "review", "review_sep"] = "report"):
     q = (q or "").strip()
     if not q:
@@ -2219,6 +2797,17 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
                 continue
             idx = _load_index(e["company"], e["period"], doc_type)
             if idx:
+                # Phase3: 비주석 본문 섹션 합류(report 축 한정) — 주석 미커버 페이지 전용
+                # 보완이므로 중복 없음. fs_div 미보유 → retrieve 의 fs_div 필터를 통과.
+                if include_sections and doc_type == "report":
+                    sp = sections_index_path(e["company"], e["period"])
+                    if sp.exists():
+                        try:
+                            secs = json.loads(sp.read_text(encoding="utf-8")).get("sections", [])
+                            if secs:
+                                idx = {**idx, "notes": list(idx.get("notes", [])) + secs}
+                        except (OSError, json.JSONDecodeError):
+                            pass  # 섹션 파일 손상 → 주석만으로 진행
                 cells.append({"company": e["company"], "period": e["period"], "index": idx})
 
     try:

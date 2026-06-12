@@ -1,0 +1,383 @@
+{
+ "tag": "sweep_u0.8_b0.3",
+ "title_level": {
+  "pairs": 815,
+  "recall@5": 0.9865,
+  "recall@10": 0.9988,
+  "visible@5": 0.9865,
+  "mrr": 0.9321
+ },
+ "content_level": {
+  "pairs": 502,
+  "recall@5": 0.9243,
+  "recall@10": 0.9502,
+  "visible@5": 0.9223,
+  "mrr": 0.7866
+ },
+ "config": {
+  "MIN_MATCH_SCORE": 0.35,
+  "backend": "local"
+ },
+ "per_query": [
+  {
+   "id": 1,
+   "level": "title",
+   "query": "퇴직급여 부채 평가",
+   "pairs": 53,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.965
+  },
+  {
+   "id": 2,
+   "level": "title",
+   "query": "대손충당금 적립과 환입 내역",
+   "pairs": 39,
+   "recall@5": 0.974,
+   "recall@10": 1.0,
+   "visible@5": 0.974,
+   "mrr": 0.775
+  },
+  {
+   "id": 3,
+   "level": "title",
+   "query": "파생상품 위험회피 회계",
+   "pairs": 29,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.948
+  },
+  {
+   "id": 4,
+   "level": "title",
+   "query": "소송 등에 대한 충당부채",
+   "pairs": 32,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.859
+  },
+  {
+   "id": 5,
+   "level": "title",
+   "query": "주당순이익 산정",
+   "pairs": 51,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.967
+  },
+  {
+   "id": 6,
+   "level": "title",
+   "query": "특수관계자와의 거래",
+   "pairs": 52,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 7,
+   "level": "title",
+   "query": "우발부채와 약정사항",
+   "pairs": 50,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 8,
+   "level": "title",
+   "query": "금융상품 공정가치 서열체계",
+   "pairs": 53,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.796
+  },
+  {
+   "id": 9,
+   "level": "title",
+   "query": "사업부문별 영업실적",
+   "pairs": 29,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.983
+  },
+  {
+   "id": 10,
+   "level": "title",
+   "query": "배당금 지급 결정",
+   "pairs": 39,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 11,
+   "level": "title",
+   "query": "법인세비용 산출 내역",
+   "pairs": 53,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 12,
+   "level": "title",
+   "query": "이연법인세 자산과 부채",
+   "pairs": 14,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.964
+  },
+  {
+   "id": 13,
+   "level": "title",
+   "query": "수수료 손익 구성",
+   "pairs": 47,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.965
+  },
+  {
+   "id": 14,
+   "level": "title",
+   "query": "이자수익과 이자비용",
+   "pairs": 53,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.981
+  },
+  {
+   "id": 15,
+   "level": "title",
+   "query": "회사채 발행과 차입금 현황",
+   "pairs": 35,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.905
+  },
+  {
+   "id": 16,
+   "level": "title",
+   "query": "고객 예수금 현황",
+   "pairs": 24,
+   "recall@5": 0.583,
+   "recall@10": 0.958,
+   "visible@5": 0.583,
+   "mrr": 0.466
+  },
+  {
+   "id": 17,
+   "level": "title",
+   "query": "보험계약 관련 부채",
+   "pairs": 17,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.941
+  },
+  {
+   "id": 18,
+   "level": "title",
+   "query": "현금흐름표 보충 정보",
+   "pairs": 35,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.957
+  },
+  {
+   "id": 19,
+   "level": "title",
+   "query": "종속기업 투자 현황",
+   "pairs": 37,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.986
+  },
+  {
+   "id": 20,
+   "level": "title",
+   "query": "담보로 제공한 자산",
+   "pairs": 5,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 21,
+   "level": "title",
+   "query": "무형자산 상각과 손상",
+   "pairs": 22,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.977
+  },
+  {
+   "id": 22,
+   "level": "title",
+   "query": "리스 사용권자산 회계처리",
+   "pairs": 7,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.683
+  },
+  {
+   "id": 23,
+   "level": "title",
+   "query": "주식기준보상 부여 현황",
+   "pairs": 27,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 1.0
+  },
+  {
+   "id": 24,
+   "level": "title",
+   "query": "매각예정자산 분류",
+   "pairs": 12,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.944
+  },
+  {
+   "id": 101,
+   "level": "content",
+   "query": "금리 변동에 따른 민감도 분석",
+   "pairs": 53,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 0.981,
+   "mrr": 0.926
+  },
+  {
+   "id": 102,
+   "level": "content",
+   "query": "기대신용손실 측정 방법",
+   "pairs": 52,
+   "recall@5": 1.0,
+   "recall@10": 1.0,
+   "visible@5": 1.0,
+   "mrr": 0.923
+  },
+  {
+   "id": 103,
+   "level": "content",
+   "query": "공정가치 수준 3 평가기법",
+   "pairs": 53,
+   "recall@5": 0.962,
+   "recall@10": 0.962,
+   "visible@5": 0.962,
+   "mrr": 0.891
+  },
+  {
+   "id": 104,
+   "level": "content",
+   "query": "연체된 대출채권 현황",
+   "pairs": 39,
+   "recall@5": 0.846,
+   "recall@10": 0.872,
+   "visible@5": 0.846,
+   "mrr": 0.673
+  },
+  {
+   "id": 105,
+   "level": "content",
+   "query": "이자율스왑 계약 내역",
+   "pairs": 34,
+   "recall@5": 0.794,
+   "recall@10": 0.882,
+   "visible@5": 0.794,
+   "mrr": 0.635
+  },
+  {
+   "id": 106,
+   "level": "content",
+   "query": "후순위 채권 발행",
+   "pairs": 50,
+   "recall@5": 0.96,
+   "recall@10": 1.0,
+   "visible@5": 0.96,
+   "mrr": 0.72
+  },
+  {
+   "id": 107,
+   "level": "content",
+   "query": "외화 환율 변동 위험",
+   "pairs": 48,
+   "recall@5": 0.938,
+   "recall@10": 0.979,
+   "visible@5": 0.938,
+   "mrr": 0.776
+  },
+  {
+   "id": 108,
+   "level": "content",
+   "query": "유동성커버리지비율 관리",
+   "pairs": 11,
+   "recall@5": 0.818,
+   "recall@10": 0.909,
+   "visible@5": 0.818,
+   "mrr": 0.533
+  },
+  {
+   "id": 109,
+   "level": "content",
+   "query": "사용권자산 감가상각",
+   "pairs": 39,
+   "recall@5": 0.897,
+   "recall@10": 0.974,
+   "visible@5": 0.897,
+   "mrr": 0.698
+  },
+  {
+   "id": 110,
+   "level": "content",
+   "query": "보통주자본비율 규제자본",
+   "pairs": 47,
+   "recall@5": 0.915,
+   "recall@10": 0.936,
+   "visible@5": 0.915,
+   "mrr": 0.693
+  },
+  {
+   "id": 111,
+   "level": "content",
+   "query": "신용등급별 익스포저 분포",
+   "pairs": 23,
+   "recall@5": 0.739,
+   "recall@10": 0.739,
+   "visible@5": 0.739,
+   "mrr": 0.7
+  },
+  {
+   "id": 112,
+   "level": "content",
+   "query": "할인율 가정 변동 영향",
+   "pairs": 53,
+   "recall@5": 0.962,
+   "recall@10": 0.962,
+   "visible@5": 0.962,
+   "mrr": 0.9
+  }
+ ]
+}

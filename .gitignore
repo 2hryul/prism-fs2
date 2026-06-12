@@ -27,3 +27,6 @@ handoff/
 # 빌드 자산 (대용량·재생성 가능)
 src/models/
 build/
+
+# 평가 하네스 PDF 텍스트 캐시(재생성 가능)
+doc/eval/.pdfcache/
