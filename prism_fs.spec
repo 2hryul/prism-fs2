@@ -30,8 +30,10 @@ hiddenimports = [
 ]
 
 # 무거운 패키지는 데이터·바이너리·서브모듈 일괄 수집(누락 시 frozen 기동 실패 방지).
-for pkg in ("sentence_transformers", "transformers", "torch", "tokenizers",
-            "safetensors", "fitz", "rank_bm25", "sklearn", "scipy",
+# numpy/pandas 명시 수집 필수 — numpy 2.x 는 서브모듈(numpy._core._exceptions 등)이
+# 자동 추적되지 않아 frozen 기동 시 ModuleNotFoundError 발생(슬림 venv 에서 재현).
+for pkg in ("numpy", "pandas", "sentence_transformers", "transformers", "torch",
+            "tokenizers", "safetensors", "fitz", "rank_bm25", "sklearn", "scipy",
             "huggingface_hub", "fastapi", "starlette", "kiwipiepy", "kiwipiepy_model"):
     try:
         d, b, h = collect_all(pkg)
@@ -49,8 +51,19 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "PyQt5", "PySide2", "notebook", "IPython"],
+    # 미사용·번들 비대 패키지 제외(빌드 venv엔 애초에 미설치 — 이중 안전장치).
+    #   cv2/av/camelot: 표 추출(camelot) 전이 의존성이나 앱 미사용(PyMuPDF 사용).
+    #   torch CUDA: 빌드 venv가 CPU torch라 해당 없음. test/notebook 류 개발 전용.
+    excludes=["tkinter", "matplotlib", "PyQt5", "PySide2", "notebook", "IPython",
+              "cv2", "av", "camelot", "pypdf", "pytest", "playwright"],
     noarchive=False,
+    # transformers/sentence_transformers 는 지연 로딩(_LazyModule)이 __file__ 로
+    # 소스를 다시 찾는다 → PYZ 바이트코드(.pyc)만 있으면 WinError 3(소스 누락)로
+    # 모델 로드 실패→bigram 폴백. 소스(.py) 모드로 디스크에 펼쳐 __file__ 정합.
+    module_collection_mode={
+        "transformers": "py",
+        "sentence_transformers": "py",
+    },
 )
 pyz = PYZ(a.pure)
 

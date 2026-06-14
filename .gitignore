@@ -12,6 +12,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.venv-build/   # 빌드 전용 CPU-torch venv(재생성: _build_venv_install 절차)
 
 # 임시·캐시
 *.tmp

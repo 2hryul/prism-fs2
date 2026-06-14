@@ -7,8 +7,17 @@ run_server.py — 데스크톱 진입점 (PyInstaller onedir 번들)
 개발 모드에서도 동일하게 동작: python src/run_server.py
 """
 import os
+import sys
 import threading
 import webbrowser
+
+# 한글 Windows 콘솔(cp949)은 em-dash(—)·화살표(→) 등을 인코딩 못 해 기동 로그 출력 시
+# UnicodeEncodeError 로 죽는다(데모 PC 재현). 진입점에서 stdout/stderr 를 UTF-8 로 강제.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass  # windowed 모드 등 stream 부재 — 무시
 
 # 임베딩 모델 오프라인 강제(번들 동봉 모델만 사용 — 외부 다운로드 시도 차단).
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
