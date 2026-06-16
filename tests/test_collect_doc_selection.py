@@ -48,7 +48,7 @@ def gated(tmp_path, monkeypatch):
 
 def _collect(odr, **sel):
     return cd.collect_company(None, "k", "신한", "C001", 2025, "11014", "2025Q3",
-                              odr=odr, collect_report=False, **sel)
+                              odr=odr, **sel)
 
 
 def test_review_only(gated):

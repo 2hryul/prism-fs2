@@ -23,7 +23,6 @@ def test_strip_review_preserves_review_sep():
     """review 삭제 시 review_sep_* 는 반드시 보존(접두 충돌 방지)."""
     entry = {
         "company": "신한", "period": "2025Q3",
-        "indexed": True, "notes_count": 50,
         "review_indexed": True, "review_notes_count": 30,
         "review_sep_indexed": True, "review_sep_notes_count": 31,
     }
@@ -32,16 +31,6 @@ def test_strip_review_preserves_review_sep():
     assert "review_indexed" not in out and "review_notes_count" not in out
     # review_sep_* 보존 (핵심)
     assert out["review_sep_indexed"] is True and out["review_sep_notes_count"] == 31
-    # report 보존
-    assert out["indexed"] is True and out["notes_count"] == 50
-
-
-def test_strip_report_keeps_reviews():
-    entry = {"company": "신한", "period": "2025Q3", "indexed": True, "notes_count": 50,
-             "review_indexed": True, "review_sep_indexed": True}
-    out = app._strip_doc_fields(entry, "report")
-    assert "indexed" not in out and "notes_count" not in out
-    assert out["review_indexed"] is True and out["review_sep_indexed"] is True
 
 
 def test_strip_review_sep_only():
@@ -71,9 +60,7 @@ def _seed(root, company, period, doc_types, fs=False):
     for dt in doc_types:
         app.pdf_path(company, period, dt).write_bytes(b"%PDF-1.4 test")
         app.index_path(company, period, dt).write_text("{}", encoding="utf-8")
-        if dt == "report":
-            fields.update(indexed=True, notes_count=10)
-        elif dt == "review":
+        if dt == "review":
             fields.update(review_indexed=True, review_notes_count=20)
         else:
             fields.update(review_sep_indexed=True, review_sep_notes_count=30)
@@ -85,22 +72,22 @@ def _seed(root, company, period, doc_types, fs=False):
 
 
 def test_delete_doc_keeps_siblings(lib):
-    d = _seed(lib, "신한", "2025Q3", ["report", "review"])
-    res = asyncio.run(app.delete_library_doc("신한", "2025Q3", "review"))
-    assert res["scope"] == "review"
-    # review 삭제·report 보존
-    assert not app.pdf_path("신한", "2025Q3", "review").exists()
-    assert not app.index_path("신한", "2025Q3", "review").exists()
-    assert app.pdf_path("신한", "2025Q3", "report").exists()
+    d = _seed(lib, "신한", "2025Q3", ["review", "review_sep"])
+    res = asyncio.run(app.delete_library_doc("신한", "2025Q3", "review_sep"))
+    assert res["scope"] == "review_sep"
+    # review_sep 삭제·review 보존
+    assert not app.pdf_path("신한", "2025Q3", "review_sep").exists()
+    assert not app.index_path("신한", "2025Q3", "review_sep").exists()
+    assert app.pdf_path("신한", "2025Q3", "review").exists()
     entry = next(e for e in app.load_catalog()["entries"]
                  if e["company"] == "신한" and e["period"] == "2025Q3")
-    assert entry.get("indexed") is True
-    assert "review_indexed" not in entry
+    assert entry.get("review_indexed") is True
+    assert "review_sep_indexed" not in entry
 
 
 def test_delete_last_doc_no_fs_removes_cell(lib):
-    d = _seed(lib, "KB", "2025Q3", ["report"])
-    res = asyncio.run(app.delete_library_doc("KB", "2025Q3", "report"))
+    d = _seed(lib, "KB", "2025Q3", ["review"])
+    res = asyncio.run(app.delete_library_doc("KB", "2025Q3", "review"))
     assert res["scope"] == "cell"
     assert not d.exists()
     assert not any(e["company"] == "KB" and e["period"] == "2025Q3"
@@ -108,19 +95,19 @@ def test_delete_last_doc_no_fs_removes_cell(lib):
 
 
 def test_delete_last_doc_with_fs_keeps_cell(lib):
-    d = _seed(lib, "하나", "2025FY", ["review"], fs=True)
-    res = asyncio.run(app.delete_library_doc("하나", "2025FY", "review"))
+    d = _seed(lib, "하나", "2025Q3", ["review"], fs=True)
+    res = asyncio.run(app.delete_library_doc("하나", "2025Q3", "review"))
     assert res["scope"] == "review"          # 셀 유지(재무데이터 존재)
     assert d.exists()
     assert (d / "fs_structured.json").exists()
     entry = next(e for e in app.load_catalog()["entries"]
-                 if e["company"] == "하나" and e["period"] == "2025FY")
+                 if e["company"] == "하나" and e["period"] == "2025Q3")
     assert entry.get("fs_collected") is True
     assert "review_indexed" not in entry
 
 
 def test_delete_bad_doc_type_400(lib):
-    _seed(lib, "신한", "2025Q3", ["report"])
+    _seed(lib, "신한", "2025Q3", ["review"])
     with pytest.raises(HTTPException) as ei:
         asyncio.run(app.delete_library_doc("신한", "2025Q3", "bogus"))
     assert ei.value.status_code == 400
@@ -128,5 +115,5 @@ def test_delete_bad_doc_type_400(lib):
 
 def test_delete_missing_cell_404(lib):
     with pytest.raises(HTTPException) as ei:
-        asyncio.run(app.delete_library_doc("우리", "2025Q3", "report"))
+        asyncio.run(app.delete_library_doc("우리", "2025Q3", "review"))
     assert ei.value.status_code == 404

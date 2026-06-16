@@ -3,7 +3,7 @@ notes_rag.py — 주석 RAG (§5.4, 옵트인) · prism-fs
 
 정성(주석 텍스트) 전용 AI 레이어. **숫자는 절대 읽거나 생성하지 않는다**(정량은 fs_compare 결정론).
 - retrieve: 질의 임베딩 ↔ note title 임베딩 cosine 상위 K (동일 fs_div).
-- extract_note_text: report.pdf 해당 페이지에서 본문 텍스트 추출(노트당 페이지·글자 캡).
+- extract_note_text: 검토보고서 PDF 해당 페이지에서 본문 텍스트 추출(노트당 페이지·글자 캡).
 - build_prompt/answer: Ollama 옵트인 시에만. "제공 근거로만 답하고 각 문장에 출처 표기" 강제.
 
 인용 강제·HITL·옵트인 경계는 호출부(app.py /api/notes/rag)에서 최종 보장:
@@ -145,11 +145,11 @@ def retrieve(query_emb: List[float], indexed_cells: List[Dict[str, Any]],
 
 
 def extract_note_text(company: str, period: str, page_start: int, page_end: int,
-                      doc_type: str = "report") -> str:
-    """report.pdf 의 page_start..min(page_start+MAX_PAGES, page_end) 텍스트(캡 적용)."""
+                      doc_type: str = "review") -> str:
+    """검토보고서 PDF 의 page_start..min(page_start+MAX_PAGES, page_end) 텍스트(캡 적용)."""
     if not _HAS_FITZ or not page_start:
         return ""
-    fname = "report.pdf" if doc_type == "report" else "review.pdf"
+    fname = "review_sep.pdf" if doc_type == "review_sep" else "review.pdf"
     pdf_path = LIBRARY_ROOT / company / period / fname
     if not pdf_path.exists():
         return ""

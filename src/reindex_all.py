@@ -2,10 +2,9 @@
 """라이브러리 전체 재인덱싱 — 디스크의 모든 작업본 PDF 를 현행 스키마로 다시 인덱싱.
 
 실행(프로젝트 루트):
-    python src\\reindex_all.py [--no-llm] [--only 회사/기간] [--extras-only]
+    python src\\reindex_all.py [--no-llm] [--only 회사/기간]
 - --no-llm      : Ollama 노트 보정 생략(속도 우선 — 휴리스틱 추출 그대로 인덱싱)
 - --only        : 특정 셀만(예: --only 신한/2025Q3)
-- --extras-only : 주석 재인덱싱 없이 부가 인덱스(비주석 섹션·XBRL 크로스링크)만 생성
 서버와 동시 실행 금지(인덱스 파일 쓰기 경합). 진행 로그를 stdout 으로 출력.
 """
 import sys
@@ -29,29 +28,12 @@ async def main():
     if "--only" in args:
         only = args[args.index("--only") + 1]
 
-    if "--extras-only" in args:
-        # 주석 인덱스는 유지하고 섹션·XBRL 링크만 (재)생성 — Phase3 백필용.
-        cells = [(d.parent.name, d.name) for d in sorted(app.LIBRARY_ROOT.glob("*/*"))
-                 if not only or f"{d.parent.name}/{d.name}" == only]
-        print(f"[extras] 대상 {len(cells)}셀 (섹션+XBRL 링크)")
-        for i, (company, period) in enumerate(cells, 1):
-            t1 = time.time()
-            try:
-                sec = await app.build_sections_index(company, period)
-                xl = await app.build_xbrl_links(company, period)
-                print(f"[{i}/{len(cells)}] {company}/{period} — 섹션 {sec.get('sections', 0)}개"
-                      f"(청크 {sec.get('chunks', 0)}), XBRL 연결주석 {xl.get('linked_notes', 0)}개, "
-                      f"{time.time() - t1:.0f}s")
-            except Exception as e:
-                print(f"[{i}/{len(cells)}] {company}/{period} — 예외: {type(e).__name__}: {e}")
-        return
-
     targets = []
     for cell_dir in sorted(app.LIBRARY_ROOT.glob("*/*")):
         company, period = cell_dir.parent.name, cell_dir.name
         if only and f"{company}/{period}" != only:
             continue
-        for dt in ("report", "review", "review_sep"):
+        for dt in ("review", "review_sep"):
             if app.pdf_path(company, period, dt).exists():
                 targets.append((company, period, dt))
 

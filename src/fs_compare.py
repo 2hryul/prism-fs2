@@ -37,14 +37,10 @@ CMP_COL = {
 
 
 def cmp_col(sj_div: str, period: str):
-    """sj_div·기간별 비교 컬럼 선택. 연간(FY)은 손익/현금흐름을 전기 **동기**가 아니라
-    전기 **연간**(frmtrm)과 비교한다(사업보고서엔 frmtrm_q 가 비어 N/A 되는 문제 해소).
-    재무상태표(BS)는 분기·연간 모두 전기말(frmtrm)이라 변화 없음.
+    """sj_div 별 비교 컬럼 선택. 재무상태표(BS)=전기말(frmtrm),
+    손익/현금흐름=전기동기(frmtrm_q). (period 인자는 호출부 시그니처 유지용.)
     """
-    col, ko = CMP_COL.get(sj_div, ("frmtrm", "전기"))
-    if period and period.endswith("FY") and col == "frmtrm_q":
-        return ("frmtrm", "전기(연간)")
-    return col, ko
+    return CMP_COL.get(sj_div, ("frmtrm", "전기"))
 
 
 def _to_int(s: Any) -> Optional[int]:

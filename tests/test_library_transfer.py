@@ -29,16 +29,16 @@ def lib(tmp_path, monkeypatch):
 def _seed_cell(root, company="신한", period="2025Q3", indexed=True):
     d = root / company / period
     d.mkdir(parents=True, exist_ok=True)
-    (d / "report.pdf").write_bytes(b"%PDF-1.4")
+    (d / "review.pdf").write_bytes(b"%PDF-1.4")
     (d / "fs_structured.json").write_text("{}", encoding="utf-8")
     (d / "meta.json").write_text(json.dumps(
         {"rcept_no": "R1", "report_nm": "분기보고서 (2025.09)"},
         ensure_ascii=False), encoding="utf-8")
     if indexed:
-        (d / "index.json").write_text(json.dumps({
-            "schema": 3, "source_type": "full_report", "detected_unit": "원",
+        (d / "index_review.json").write_text(json.dumps({
+            "schema": 3, "source_type": "slim", "detected_unit": "원",
             "notes": [{"no": 1, "title": "회사의 개요", "fs_div": "연결"},
-                      {"no": 1, "title": "일반사항", "fs_div": "별도"}],
+                      {"no": 2, "title": "중요한 회계정책", "fs_div": "연결"}],
         }, ensure_ascii=False), encoding="utf-8")
     return d
 
@@ -47,9 +47,9 @@ def _seed_cell(root, company="신한", period="2025Q3", indexed=True):
 def test_cell_entry_from_disk(lib):
     _seed_cell(lib)
     e = app._cell_entry_from_disk("신한", "2025Q3")
-    assert e["report_collected"] is True and e["fs_collected"] is True
-    assert e["indexed"] is True and e["notes_count"] == 2
-    assert e["notes_count_연결"] == 1 and e["notes_count_별도"] == 1
+    assert e["review_collected"] is True and e["fs_collected"] is True
+    assert e["review_indexed"] is True and e["review_notes_count"] == 2
+    assert e["review_notes_count_연결"] == 2 and e["review_notes_count_별도"] == 0
     assert e["rcept_no"] == "R1"
 
 
@@ -65,9 +65,9 @@ def test_rescan_rebuilds_catalog(lib):
     assert res["cells"] == 2
     cat = app.load_catalog()
     by = {(e["company"], e["period"]): e for e in cat["entries"]}
-    assert by[("신한", "2025Q3")]["indexed"] is True
-    assert by[("KB", "2025Q2")].get("indexed") is not True
-    assert by[("KB", "2025Q2")]["report_collected"] is True
+    assert by[("신한", "2025Q3")]["review_indexed"] is True
+    assert by[("KB", "2025Q2")].get("review_indexed") is not True
+    assert by[("KB", "2025Q2")]["review_collected"] is True
 
 
 # ── zip 멤버 검증(경로 탈출 차단) ────────────────────────────────────────────
@@ -89,10 +89,10 @@ def _make_export_zip(tmp_path, dim=None, cells=("신한/2025Q3",)):
         zf.writestr("manifest.json", json.dumps({
             "app": "prism-fs", "schema": 3, "embed_dim": dim, "cells": list(cells)}))
         for c in cells:
-            zf.writestr(f"{c}/index.json", json.dumps({
+            zf.writestr(f"{c}/index_review.json", json.dumps({
                 "schema": 3, "notes": [{"no": 1, "title": "회사의 개요", "fs_div": "연결"}]},
                 ensure_ascii=False))
-            zf.writestr(f"{c}/report.pdf", "%PDF-1.4")
+            zf.writestr(f"{c}/review.pdf", "%PDF-1.4")
     return zp
 
 
@@ -100,9 +100,9 @@ def test_import_zip_merges_and_registers(lib, tmp_path):
     zp = _make_export_zip(tmp_path)
     res = app._import_zip_blocking(zp, overwrite=False)
     assert res["imported"] == ["신한/2025Q3"]
-    assert (lib / "신한" / "2025Q3" / "index.json").exists()
+    assert (lib / "신한" / "2025Q3" / "index_review.json").exists()
     cat = app.load_catalog()
-    assert cat["entries"][0]["indexed"] is True  # 카탈로그 자동 등록
+    assert cat["entries"][0]["review_indexed"] is True  # 카탈로그 자동 등록
 
 
 def test_import_skips_existing_without_overwrite(lib, tmp_path):

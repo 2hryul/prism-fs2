@@ -52,30 +52,26 @@ def test_doc_detail_renamed(lib):
     assert out["detected_unit"] == "억원"
 
 
-def test_doc_detail_manual_upload(lib):
-    """본문 PDF 미제공(report) → manual_upload_required=True, 미수집·미변경."""
+def test_doc_detail_not_collected(lib):
+    """수집물 없음(디스크 PDF 부재) → 미수집·미변경·미인덱싱."""
     _cell(lib)
-    out = app._doc_detail("신한", "2025Q3", {
-        "doc_type": "report", "display_pdf": "manual_upload_required"})
-    assert out["manual_upload_required"] is True
+    out = app._doc_detail("신한", "2025Q3", {"doc_type": "review"})
     assert out["collected"] is False
     assert out["renamed"] is False
     assert out["indexed"] is False and out["notes_count"] is None
 
 
-def test_doc_detail_noclobber_report(lib):
+def test_doc_detail_noclobber_review(lib):
     """무클로버 재수집(meta 에 file 없음)이라도 디스크 PDF 기준 collected=True,
     저장명은 표준 작업본 폴백, 원본명은 디렉터리 스캔 폴백(original_pdf_name)."""
     d = _cell(lib)
-    (d / "report.pdf").write_bytes(b"%PDF-1.4")
-    (d / "[신한지주]분기보고서(2025.11.14).pdf").write_bytes(b"%PDF-1.4")
-    out = app._doc_detail("신한", "2025Q3",
-                          {"doc_type": "report", "display_pdf": "manual_upload_required"})
+    (d / "review.pdf").write_bytes(b"%PDF-1.4")
+    (d / "[신한지주]연결검토보고서(2025.11.14).pdf").write_bytes(b"%PDF-1.4")
+    out = app._doc_detail("신한", "2025Q3", {"doc_type": "review"})
     assert out["collected"] is True
-    assert out["file"] == "report.pdf"  # 표준 작업본 폴백
-    assert out["filename_original"] == "[신한지주]분기보고서(2025.11.14).pdf"
+    assert out["file"] == "review.pdf"  # 표준 작업본 폴백
+    assert out["filename_original"] == "[신한지주]연결검토보고서(2025.11.14).pdf"
     assert out["renamed"] is True  # 원본명 → 표준명 저장
-    assert out["manual_upload_required"] is False  # 디스크에 본문 존재 → 안내 불필요
 
 
 def test_collect_details_synthesizes_disk_docs(lib):
@@ -132,14 +128,14 @@ def test_collect_details_fetch_failures_passthrough(lib):
 def test_doc_detail_existing_flags(lib):
     """이번 런 미수집·디스크 보유 → existing=True (합성 항목·무클로버 meta 항목 모두)."""
     d = _cell(lib)
-    (d / "report.pdf").write_bytes(b"%PDF-1.4")
-    # 무클로버: meta 의 report 항목엔 fetch 결과 필드(file/filename_dart) 없음
-    noclobber = app._doc_detail("신한", "2025Q3", {"doc_type": "report"})
+    (d / "review.pdf").write_bytes(b"%PDF-1.4")
+    # 무클로버: meta 의 review 항목엔 fetch 결과 필드(file/filename_dart) 없음
+    noclobber = app._doc_detail("신한", "2025Q3", {"doc_type": "review"})
     assert noclobber["existing"] is True
     # 합성 항목(meta documents 에 아예 없던 디스크 파일)도 동일 경로 → existing=True
     synth = app._collect_details("신한", "2025Q3", {"documents": []})["documents"][0]
-    assert synth["doc_type"] == "report" and synth["existing"] is True
+    assert synth["doc_type"] == "review" and synth["existing"] is True
     # 이번 런 fetch 성공 항목 → existing=False
     fetched = app._doc_detail("신한", "2025Q3", {
-        "doc_type": "report", "file": "report.pdf", "filename_dart": "분기보고서.pdf"})
+        "doc_type": "review", "file": "review.pdf", "filename_dart": "연결검토보고서.pdf"})
     assert fetched["existing"] is False

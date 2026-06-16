@@ -11,19 +11,18 @@ DART OpenAPI(opendart.fss.or.kr)에서 4대 금융지주(신한/KB/하나/우리
   1) corpCode.xml  → corp_code 매핑(corp_codes.json 캐시)
   2) list.json     → 정기공시 목록에서 대상 보고서 rcept_no/report_nm/rcept_dt
   3) fnlttSinglAcntAll.json → 구조화 재무제표 → fs_structured.json
-  4) fnlttXbrl.xml → 재무제표 원본 XBRL ZIP → xbrl/ 해제
-  5) document.xml  → 제출원문 묶음 → source/
+  4) document.xml  → 제출원문 묶음 → source/
+  5) 검토보고서(연결/별도) 첨부 PDF → review.pdf / review_sep.pdf
   + meta.json
 
 설계 정직성 — 표시용 PDF 한계 (중요)
 ------------------------------------
 DART OpenAPI 의 document.xml 은 "제출원문 묶음"(XML 등)을 반환하며,
-뷰어용 깔끔한 PDF(예: 분기연결검토보고서)를 직접 보장하지 않는다.
-따라서 본 수집기는 "구조화데이터 + XBRL 확보"를 1차 목적으로 하고,
-document.xml 이 주는 원문은 그대로 source/ 에 저장한다.
-표시용 report.pdf 를 자동 확보하지 못하면, 기존 수동 PDF 업로드 경로
-(main.py 의 /api/library/upload → report.pdf)를 그대로 사용한다.
-수집기는 main.py 가 인덱싱에 쓰는 report.pdf / index.json 을 건드리지 않는다.
+뷰어용 깔끔한 PDF 를 직접 보장하지 않는다. 따라서 본 수집기는 "구조화데이터
+확보"를 1차 목적으로 하고, document.xml 이 주는 원문은 그대로 source/ 에 저장한다.
+검토보고서 표시용 PDF 를 자동 확보하지 못하면, 기존 수동 PDF 업로드 경로
+(main.py 의 /api/library/upload → review.pdf)를 그대로 사용한다.
+수집기는 main.py 가 인덱싱에 쓰는 인덱스(index_review*.json)를 건드리지 않는다.
 
 보안
 ----
@@ -66,7 +65,7 @@ except ImportError:
     _HAS_HTTPX = False
 
 # OpenDartReader 는 검토보고서(표시용 PDF) 첨부 수집에만 필요.
-# import 실패(미설치)해도 드라이런/셀프테스트/기존 수집(보고서·XBRL·fnltt)은 동작해야 함.
+# import 실패(미설치)해도 드라이런/셀프테스트/기존 수집(fnltt·document)은 동작해야 함.
 try:
     import OpenDartReader  # noqa: N816 (외부 패키지명 그대로)
     _HAS_OPENDART = True
@@ -113,13 +112,12 @@ REPRT_TO_PERIOD_SUFFIX: Dict[str, str] = {
     "11013": "Q1",  # 1분기보고서
     "11012": "Q2",  # 반기보고서
     "11014": "Q3",  # 3분기보고서
-    "11011": "FY",  # 사업보고서
 }
 
 # report_nm 의 결산기 마커("(YYYY.MM)")로 대상 보고서를 정밀 선택.
-#   11013→03(1분기) 11012→06(반기) 11014→09(3분기) 11011→12(사업).
+#   11013→03(1분기) 11012→06(반기) 11014→09(3분기).
 REPRT_TO_PERIOD_MARK: Dict[str, str] = {
-    "11013": "03", "11012": "06", "11014": "09", "11011": "12",
+    "11013": "03", "11012": "06", "11014": "09",
 }
 
 
@@ -133,8 +131,6 @@ def list_date_window(year: int, reprt_code: str):
         return f"{year}0701", f"{year}1031"
     if reprt_code == "11014":   # 3분기(9월) — 11월경
         return f"{year}1001", f"{year+1}0228"
-    if reprt_code == "11011":   # 사업(12월) — 익년 3월경
-        return f"{year+1}0101", f"{year+1}0630"
     return f"{year}0101", f"{year+1}0630"
 
 
@@ -321,42 +317,8 @@ def parse_fnltt_single_acnt(resp: dict) -> dict:
 
 
 # ----------------------------------------------------------------------------
-# XBRL ZIP 파싱 — _lab-ko.xml 한국어 라벨 추출(검증용)
+# ZIP 해제 — document.xml(제출원문 묶음) → source/
 # ----------------------------------------------------------------------------
-# XBRL linkbase 네임스페이스
-_NS_LINK = "http://www.xbrl.org/2003/linkbase"
-_NS_XLINK = "http://www.w3.org/1999/xlink"
-# 표준 라벨 role(다른 role: terseLabel, totalLabel, periodStart/End 등 제외해 대표 라벨만)
-_STD_LABEL_ROLE = "http://www.xbrl.org/2003/role/label"
-
-
-def extract_xbrl_labels(lab_ko_bytes: bytes, limit: Optional[int] = None) -> List[str]:
-    """XBRL _lab-ko.xml 에서 한국어 표준 라벨 텍스트를 추출.
-
-    <link:label xml:lang="ko" xlink:role=".../label">보통주자본금</link:label> 형태.
-    표준 label role 만 채택(중복/변형 라벨 role 제외). limit 이 있으면 앞 N 개만.
-
-    Returns: 라벨 문자열 리스트(원문 그대로).
-    """
-    labels: List[str] = []
-    role_attr = f"{{{_NS_XLINK}}}role"
-    lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
-    label_tag = f"{{{_NS_LINK}}}label"
-
-    # 대용량(수 MB) XML — iterparse 로 스트리밍 파싱(메모리 절약).
-    for _event, elem in ET.iterparse(io.BytesIO(lab_ko_bytes), events=("end",)):
-        if elem.tag != label_tag:
-            continue
-        if elem.get(role_attr) == _STD_LABEL_ROLE and elem.get(lang_attr) == "ko":
-            text = (elem.text or "").strip()
-            if text:
-                labels.append(text)
-        elem.clear()  # 처리 후 즉시 비워 메모리 누수 방지
-        if limit is not None and len(labels) >= limit:
-            break
-    return labels
-
-
 def unzip_to(zip_bytes: bytes, dest_dir: Path) -> List[str]:
     """ZIP 바이트를 dest_dir 에 해제. 경로탈출(zip slip) 방지. 해제 파일명 리스트 반환."""
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -377,28 +339,19 @@ def unzip_to(zip_bytes: bytes, dest_dir: Path) -> List[str]:
     return extracted
 
 
-def find_lab_ko_in_zip(zip_path: Path) -> Optional[bytes]:
-    """ZIP 파일에서 *_lab-ko.xml 엔트리 바이트를 반환(오프라인 검증용)."""
-    with zipfile.ZipFile(zip_path) as zf:
-        for name in zf.namelist():
-            if name.endswith("_lab-ko.xml"):
-                return zf.read(name)
-    return None
-
-
 # ----------------------------------------------------------------------------
 # source_type 판정 (보고서명 기반)
 # ----------------------------------------------------------------------------
 def classify_source_type(report_nm: str) -> str:
     """보고서명으로 full_report / slim 판정.
 
-    사업보고서·분기보고서·반기보고서 = full_report(전체 본문+주석).
+    분기보고서·반기보고서 = full_report(전체 본문+주석).
     검토보고서 = slim(주석 중심). 기타는 보수적으로 full_report.
     """
     nm = report_nm or ""
     if "검토보고서" in nm:
         return "slim"
-    if any(k in nm for k in ("사업보고서", "분기보고서", "반기보고서")):
+    if any(k in nm for k in ("분기보고서", "반기보고서")):
         return "full_report"
     return "full_report"
 
@@ -410,13 +363,6 @@ def classify_source_type(report_nm: str) -> str:
 # 그 다음 "검토보고서"(연결/별도 표기 변형 흡수), 마지막으로 "감사보고서"(분기검토 대신
 # 첨부될 수 있는 케이스 대비). 회사별 title 변형(KB/하나/우리)을 키워드로 흡수한다.
 _REVIEW_TITLE_PRIORITY: Tuple[str, ...] = ("연결검토보고서", "검토보고서", "감사보고서")
-
-# 분기/반기/사업보고서 "본문" 문서 선택 우선순위. 키워드가 본문 보고서명만
-# 포함하므로 검토/감사 첨부와 겹치지 않는다(예: "분기검토보고서"는 "분기보고서"를
-# 부분문자열로 포함하지 않음 → review 문서 오선택 없음).
-# 참고: 이 보고서명은 DART 원본 파일명 매칭용(불변). 연결/별도(CFS/OFS) 구분은
-# 문서 종류가 아니라 fs_structured.json 의 by_fs_div 와 주석 note.fs_div 로 한다.
-_REPORT_TITLE_PRIORITY: Tuple[str, ...] = ("분기보고서", "반기보고서", "사업보고서")
 
 # 매직넘버: PDF 파일 시그니처. 첫 5바이트가 이것이면 표시용 PDF 로 확정.
 _PDF_MAGIC = b"%PDF-"
@@ -503,30 +449,6 @@ def pick_review_doc_separate(docs) -> Optional[dict]:
         if any(k in title for k in _REVIEW_BODY_KEYWORDS):
             return {"title": title, "url": url}
     return None
-
-
-def pick_report_pdf(files: dict) -> Optional[Tuple[str, str]]:
-    """attach_files(rcept_no) 결과 dict{파일명: url}에서 본문 보고서 PDF 1건 선택.
-
-    본문 보고서(예: '[하나금융지주]분기보고서(2025.11.14).pdf')는 attach_docs(첨부문서
-    =검토/감사보고서)에는 없고 attach_files(rcept_no)가 직접 반환한다(라이브 확인).
-    같이 오는 XBRL 원문(.zip)은 표시용 PDF 가 아니므로 .pdf 만 후보로 둔다.
-    우선순위: 분기>반기>사업보고서 키워드를 파일명에 포함한 .pdf, 없으면 첫 .pdf.
-    후보 없으면 None.
-
-    Returns: (파일명, url) 또는 None.
-    """
-    if not files:
-        return None
-    pdfs = [(name, url) for name, url in files.items()
-            if str(name).lower().endswith(".pdf")]
-    if not pdfs:
-        return None
-    for keyword in _REPORT_TITLE_PRIORITY:
-        for name, url in pdfs:
-            if keyword in name:
-                return (name, url)
-    return pdfs[0]
 
 
 def is_pdf_bytes(head: bytes) -> bool:
@@ -637,7 +559,7 @@ def _fetch_attachment_pdf(odr, rcept_no: str, dest_dir: Path, picker,
 
     보안: OpenDartReader 내부 예외 메시지/URL 에는 키가 섞일 수 있으므로
     예외는 type(e).__name__ 만 로깅한다. 모든 실패는 경고 후 None 반환 —
-    기존 분기보고서/XBRL/fnltt 수집 흐름을 절대 깨지 않는다.
+    기존 fnltt/document 수집 흐름을 절대 깨지 않는다.
 
     Args:
         odr: OpenDartReader 인스턴스(run_live 에서 1회 생성).
@@ -801,111 +723,6 @@ def fetch_review_sep_attachment(odr, rcept_no: str, dest_dir: Path,
     )
 
 
-def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
-                            overwrite: bool = False,
-                            fail_reasons: Optional[dict] = None) -> Optional[dict]:
-    """분기/반기/사업보고서 "본문"(표시용 PDF)을 OpenDartReader 2단계로 수집.
-
-    경로(라이브 확인) — 본문 보고서는 attach_docs(첨부=검토/감사)에 없고
-    attach_files(rcept_no)가 직접 준다:
-      1) odr.attach_files(rcept_no) → dict{파일명: url}. 본문 보고서 .pdf 선택(XBRL zip 제외).
-      2) odr.download(pdf_url, dest/"report.pdf").
-    저장 후 매직넘버(%PDF-) 검증. PDF 가 아니면 report.raw 로 격리(display_ok=False) —
-    인덱싱이 깨진 report.pdf 를 집어가지 않도록.
-
-    무클로버 계약(중요): report.pdf 가 이미 있으면 overwrite=False 인 한 절대
-    덮어쓰지 않고 None 반환한다. main.py 의 수동 업로드/인덱싱(report.pdf·index.json)
-    경로를 보존하기 위함. index.json 도 건드리지 않는다.
-
-    실패는 전부 경고 후 None — 기존 분기보고서/XBRL/fnltt 수집 흐름 무회귀.
-
-    Args:
-        odr: OpenDartReader 인스턴스(run_live 에서 1회 생성).
-        rcept_no: 대상 보고서 접수번호.
-        dest_dir: 저장 디렉토리(회사×기간 셀).
-        overwrite: True 면 기존 report.pdf 도 덮어씀(기본 False — 무클로버).
-    Returns:
-        성공 시 {doc_type, file, filename_dart, source_type, display_ok, mime?} dict,
-        무클로버 스킵/후보 없음/실패 시 None.
-    """
-    if odr is None or not rcept_no:
-        return None
-    out_pdf = dest_dir / "report.pdf"
-    if out_pdf.exists() and not overwrite:
-        print(f"[fetch_report_attachment] rcept_no={rcept_no} report.pdf 이미 존재 "
-              f"— 무클로버(수동 업로드/인덱싱 보존), report 수집 스킵", file=sys.stderr)
-        return None
-    try:
-        # 1) 본문 첨부파일(dict{파일명: url}) → 본문 보고서 .pdf 선택.
-        #    레이트리밋 시 빈 dict 대비 3회 재시도.
-        files = {}
-        for attempt in range(3):
-            files = odr.attach_files(rcept_no) or {}
-            if files:
-                break
-            time.sleep(1.5 * (attempt + 1))
-        if not files:
-            print(f"[fetch_report_attachment] rcept_no={rcept_no} 첨부파일 없음 "
-                  f"(3회 재시도 후) — report 스킵", file=sys.stderr)
-            _note_fail(fail_reasons, "report", "첨부파일 목록 조회 실패(재시도 권장)",
-                       url=dart_viewer_url(rcept_no))
-            return None
-        picked = pick_report_pdf(files)
-        if picked is None:
-            print(f"[fetch_report_attachment] rcept_no={rcept_no} 본문 보고서 PDF 후보 없음 "
-                  f"(.pdf 없음/XBRL zip 만 존재) — report 미수집", file=sys.stderr)
-            _note_fail(fail_reasons, "report", "본문 PDF 미제공 공시(수동 업로드 필요)",
-                       url=dart_viewer_url(rcept_no))
-            return None
-        pdf_name, pdf_url = picked
-
-        # 2) 다운로드 → R2: DART 원본 파일명 그대로 저장(수정/삭제 금지). 3회 재시도.
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        orig_name = safe_original_name(pdf_name, "report_original.pdf")
-        orig_path = dest_dir / orig_name
-        # OpenDartReader.download 는 pdf.do URL 에서 빈 파일을 쓰는 사례가 있어 직접 GET 사용.
-        if not download_attachment(pdf_url, orig_path):
-            print(f"[fetch_report_attachment] rcept_no={rcept_no} 다운로드 실패 "
-                  f"(file={pdf_name}, 재시도 후) — report 스킵", file=sys.stderr)
-            _note_fail(fail_reasons, "report", "PDF 다운로드 실패(DART 응답 없음 — 재시도 권장)",
-                       url=pdf_url)
-            return None
-
-        # 3) 매직넘버 검증 — PDF 면 앱 내부용 report.pdf 로 복제(원본 보존), 아니면 폴백
-        head = _read_head(orig_path, 5)
-        if is_pdf_bytes(head):
-            shutil.copy2(orig_path, out_pdf)  # 원본 미삭제 — report.pdf 는 복제본(인덱싱/표시용)
-            return {
-                "doc_type": "report",
-                "file": "report.pdf",
-                "filename_original": orig_name,
-                "filename_dart": pdf_name,
-                "source_type": classify_source_type(pdf_name),
-                "display_ok": True,
-            }
-        # 비PDF — 인덱싱이 깨질 수 있으므로 원본만 보존(report.pdf 미생성).
-        mime = "application/zip" if head[:2] == b"PK" else "application/octet-stream"
-        print(f"[fetch_report_attachment] rcept_no={rcept_no} 비PDF 첨부 - "
-              f"원본({orig_name}) 보존, report.pdf 미생성(첫바이트={head!r}, mime={mime})", file=sys.stderr)
-        _note_fail(fail_reasons, "report", "PDF 아님(원본만 보존 — 표시 불가)", url=pdf_url)
-        return {
-            "doc_type": "report",
-            "file": orig_name,
-            "filename_original": orig_name,
-            "filename_dart": pdf_name,
-            "source_type": classify_source_type(pdf_name),
-            "display_ok": False,
-            "mime": mime,
-        }
-    except Exception as e:
-        # 보안: OpenDartReader 예외 메시지는 키 포함 URL 을 노출할 수 있음 → 타입명만.
-        print(f"[fetch_report_attachment] rcept_no={rcept_no} 본문 보고서 수집 실패 "
-              f"({type(e).__name__}) — report 스킵, 기존 수집은 계속.", file=sys.stderr)
-        _note_fail(fail_reasons, "report", "수집 오류(서버 로그 참조)",
-                   url=dart_viewer_url(rcept_no))
-        return None
-
-
 # ----------------------------------------------------------------------------
 # 라이브 수집 — 요청 계획 빌더 (dry-run 과 live 가 공유)
 # ----------------------------------------------------------------------------
@@ -914,7 +731,7 @@ def build_request_plan(company: str, corp_code: str, year: int,
     """회사 1곳의 호출 계획(URL/파라미터)을 생성. 키는 호출에만 쓰고 출력 시 마스킹.
 
     Returns: [{"step","url","params"}] — params 안의 crtfc_key 는 호출용 placeholder.
-    rcept_no 의존 호출(fnlttXbrl/document)은 list.json 수집 후 채워지므로 여기선 표기만.
+    rcept_no 의존 호출(document)은 list.json 수집 후 채워지므로 여기선 표기만.
     """
     return [
         {
@@ -935,13 +752,7 @@ def build_request_plan(company: str, corp_code: str, year: int,
                        "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": "CFS"},
         },
         {
-            "step": "4.fnlttXbrl",
-            "url": f"{DART_BASE}/fnlttXbrl.xml",
-            "params": {"crtfc_key": api_key, "rcept_no": "<list.json 에서 확보>",
-                       "reprt_code": reprt_code},
-        },
-        {
-            "step": "5.document",
+            "step": "4.document",
             "url": f"{DART_BASE}/document.xml",
             "params": {"crtfc_key": api_key, "rcept_no": "<list.json 에서 확보>"},
         },
@@ -959,8 +770,7 @@ def _masked_params(params: dict) -> dict:
 # ----------------------------------------------------------------------------
 # 드라이런
 # ----------------------------------------------------------------------------
-def run_dry_run(companies: List[str], year: int, reprt_code: str,
-                collect_report: bool = False) -> None:
+def run_dry_run(companies: List[str], year: int, reprt_code: str) -> None:
     """키 없이 동작 — 호출 계획·corp_code·저장경로만 출력. 라이브 호출 없음."""
     api_key = get_api_key()  # 있으면 마스킹만, 없어도 됨
     period = period_from_reprt(year, reprt_code)
@@ -991,23 +801,18 @@ def run_dry_run(companies: List[str], year: int, reprt_code: str,
         print(f"  저장 경로:")
         print(f"    {d}\\")
         print(f"      source/             (document.xml 원문 묶음)")
-        print(f"      xbrl/               (fnlttXbrl ZIP 해제)")
         print(f"      fs_structured.json  (fnlttSinglAcntAll 결과)")
         print(f"      meta.json")
-        print(f"      (report.pdf 는 표시용 — 미확보 시 수동 업로드 유지)")
+        print(f"      (review.pdf 는 표시용 — 미확보 시 수동 업로드 유지)")
         print(f"  호출 계획:")
         for req in build_request_plan(c, corp_code, year, reprt_code, period, api_key):
             print(f"    {req['step']:<28} GET {req['url']}")
             print(f"      params={_masked_params(req['params'])}")
         # 6단계: 검토보고서 첨부(OpenDartReader 2단계). 키는 odr 내부 사용(여기선 미출력).
         odr_state = "사용 가능" if _HAS_OPENDART else "미설치(스킵 — pip install \"OpenDartReader>=0.2,<0.3\")"
-        print(f"    {'6.review(첨부)':<28} attach_docs→attach_files→download review.pdf")
+        print(f"    {'5.review(첨부)':<28} attach_docs→attach_files→download review.pdf")
         print(f"      OpenDartReader={odr_state}, 후보=연결검토보고서>검토보고서, "
               f"저장={entry_dir(c, period)}\\review.pdf (매직넘버 %PDF- 검증)")
-        if collect_report:
-            print(f"    {'7.report(본문 PDF)':<28} attach_files(rcept_no)→.pdf 선택→download report.pdf")
-            print(f"      OpenDartReader={odr_state}, 후보=분기>반기>사업보고서 .pdf(XBRL zip 배제), "
-                  f"무클로버(기존 보존), 저장={entry_dir(c, period)}\\report.pdf (매직넘버 %PDF- 검증)")
 
     print("\n" + "=" * 70)
     print("DRY-RUN 종료 — 키를 .env(DART_API_KEY)에 넣고 --dry-run 없이 실행하면 라이브 수집.")
@@ -1068,7 +873,7 @@ def pick_target_report(list_resp: dict, reprt_code: str, year: int) -> Optional[
         return None
     # reprt_code → 보고서명 키워드
     nm_key = {"11013": "분기보고서", "11012": "반기보고서",
-              "11014": "분기보고서", "11011": "사업보고서"}.get(reprt_code, "")
+              "11014": "분기보고서"}.get(reprt_code, "")
     mark = REPRT_TO_PERIOD_MARK.get(reprt_code, "")
     period_tag = f"{year}.{mark}"  # 예: '2025.09' — report_nm '(2025.09)' 와 매칭
     items = list_resp.get("list", [])
@@ -1087,19 +892,15 @@ def pick_target_report(list_resp: dict, reprt_code: str, year: int) -> Optional[
 
 def collect_company(client, api_key: str, company: str, corp_code: str,
                     year: int, reprt_code: str, period: str, odr=None,
-                    collect_report: bool = False,
                     collect_review: bool = True,
                     collect_review_sep: bool = True) -> dict:
-    """회사 1곳 라이브 수집. fs_structured.json/xbrl/source/meta.json 저장.
+    """회사 1곳 라이브 수집. fs_structured.json/source/meta.json 저장.
 
-    index.json 은 절대 건드리지 않는다(인덱싱 경로 보존). report.pdf 는 기본적으로
-    건드리지 않으나, collect_report=True 면 본문 보고서 PDF 를 "무클로버"로 수집한다
-    (기존 report.pdf 가 있으면 스킵 — 수동 업로드 보존).
+    인덱스(index_review*.json)는 절대 건드리지 않는다(인덱싱 경로 보존).
 
     Args:
         odr: OpenDartReader 인스턴스(run_live 에서 1회 생성). 검토보고서(review.pdf)
-             및 본문 보고서(report.pdf) 첨부 수집에 사용. None 이면 스킵.
-        collect_report: True 면 본문 보고서 PDF(report.pdf) 자동수집 시도(무클로버).
+             첨부 수집에 사용. None 이면 스킵.
         collect_review: True 면 연결재무제표 검토보고서(review.pdf) 첨부 수집 시도.
         collect_review_sep: True 면 별도재무제표 검토보고서(review_sep.pdf) 첨부 수집 시도.
     Returns: meta dict.
@@ -1138,18 +939,7 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     (d / "fs_structured.json").write_text(
         json.dumps(fs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 4) 재무제표 원본 XBRL → xbrl/ 해제 (rcept_no 필요)
-    xbrl_files: List[str] = []
-    if rcept_no:
-        try:
-            r = _http_get(client, f"{DART_BASE}/fnlttXbrl.xml",
-                          {"crtfc_key": api_key, "rcept_no": rcept_no,
-                           "reprt_code": reprt_code})
-            xbrl_files = unzip_to(r.content, d / "xbrl")
-        except Exception as e:
-            print(f"[collect_company] {company} fnlttXbrl 스킵 - {e}", file=sys.stderr)
-
-    # 5) 원문 문서 → source/ (표시용 PDF 는 보장 안 됨 — 받은 원문만 저장)
+    # 4) 원문 문서 → source/ (표시용 PDF 는 보장 안 됨 — 받은 원문만 저장)
     source_files: List[str] = []
     if rcept_no:
         try:
@@ -1159,7 +949,7 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
         except Exception as e:
             print(f"[collect_company] {company} document 스킵 - {e}", file=sys.stderr)
 
-    # 6) 검토보고서(연결/별도) 첨부 수집 — OpenDartReader 2단계. 실패해도 None(무회귀).
+    # 5) 검토보고서(연결/별도) 첨부 수집 — OpenDartReader 2단계. 실패해도 None(무회귀).
     #    attach_docs 는 두 picker 가 공유하므로 1회만 호출해 prefetched_docs 로 넘긴다
     #    (네트워크 중복 회피). odr/rcept_no 없으면 양쪽 스킵.
     review = None
@@ -1192,26 +982,8 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
                     fail_reasons=fail_reasons,
                 )
 
-    # 7) 본문 보고서(표시용 PDF) 첨부 수집 — opt-in(collect_report). 무클로버.
-    report_attach = (fetch_report_attachment(odr, rcept_no, d, fail_reasons=fail_reasons)
-                     if (collect_report and odr and rcept_no) else None)
-    report_pdf_ok = bool(report_attach and report_attach.get("display_ok"))
-
-    # documents[]: 제출원문(report) + (성공 시)검토보고서(review)·별도검토보고서(review_sep).
-    # 기존 meta 키는 모두 유지(하위호환).
-    report_doc = {
-        "doc_type": "report",
-        "source": "opendart document.xml",
-        "rcept_no": rcept_no,
-        "source_type": "full_report",
-        "display_pdf": "report.pdf" if report_pdf_ok else "manual_upload_required",
-    }
-    if report_attach:
-        report_doc["filename_dart"] = report_attach.get("filename_dart")
-        report_doc["display_ok"] = report_attach.get("display_ok")
-        # 요구③: report 본문 PDF 의 DART 원본 파일명 기록(pick_report_pdf 가 고른 파일명).
-        report_doc["filename_original"] = report_attach.get("filename_original")
-    documents: List[dict] = [report_doc]
+    # documents[]: (성공 시)검토보고서(review)·별도검토보고서(review_sep).
+    documents: List[dict] = []
     # pdf_url 은 내부 중복판정용 — meta.json documents[] 계약에서 제외(append 전에 제거).
     if review:
         review.pop("pdf_url", None)
@@ -1230,30 +1002,22 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
         "reprt_code": reprt_code,
         "fs_divs": fs_divs_collected,
         "source_type": classify_source_type(report_nm or ""),
-        "xbrl_files": xbrl_files,
         "source_files": source_files,
         "collected_at": now_iso(),
-        # 표시용 PDF — collect_report 로 본문 PDF 수집 성공 시 report.pdf, 아니면 수동 업로드.
-        "display_pdf": "report.pdf" if report_pdf_ok else "manual_upload_required",
-        # 문서 묶음: report(제출원문) + review(검토보고서, 성공 시). Step B(main.py) 가 소비.
+        # 문서 묶음: review(연결검토보고서)·review_sep(별도검토보고서, 성공 시). Step B(main.py) 가 소비.
         "documents": documents,
         # 선택했으나 실패한 문서의 사유(doc_type→사유) — UI 상세표가 행 단위로 안내.
         "fetch_failures": fail_reasons,
         "review_collected": bool(review),
         "review_sep_collected": bool(review_sep),
-        "report_collected": report_pdf_ok,
     }
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                  encoding="utf-8")
     return meta
 
 
-def run_live(companies: List[str], year: int, reprt_code: str,
-             collect_report: bool = False) -> int:
-    """라이브 수집 진입. 키 없으면 친절 안내 후 종료(에러 3요소).
-
-    collect_report=True 면 본문 보고서 PDF(report.pdf)도 무클로버로 자동수집한다.
-    """
+def run_live(companies: List[str], year: int, reprt_code: str) -> int:
+    """라이브 수집 진입. 키 없으면 친절 안내 후 종료(에러 3요소)."""
     api_key = get_api_key()
     if not api_key:
         print("[run_live] DART_API_KEY 미설정 - .env 에 키가 없어 라이브 수집을 시작할 수 없습니다.",
@@ -1283,7 +1047,7 @@ def run_live(companies: List[str], year: int, reprt_code: str,
             odr = None
     else:
         print("[run_live] OpenDartReader 미설치 - 검토보고서(review.pdf) 수집 스킵. "
-              "보고서/XBRL/fnltt 수집은 계속. ('pip install \"OpenDartReader>=0.2,<0.3\"')",
+              "fnltt/document 수집은 계속. ('pip install \"OpenDartReader>=0.2,<0.3\"')",
               file=sys.stderr)
 
     with httpx.Client(timeout=60.0) as client:
@@ -1302,15 +1066,13 @@ def run_live(companies: List[str], year: int, reprt_code: str,
                 continue
             try:
                 meta = collect_company(client, api_key, c, corp_code, year, reprt_code,
-                                       period, odr=odr, collect_report=collect_report)
-                review_note = ("review=OK(" + meta["documents"][-1]["filename_dart"] + ")"
-                               if meta.get("review_collected") else "review=미수집")
-                report_note = ("report=OK(" + (meta["documents"][0].get("filename_dart") or "") + ")"
-                               if meta.get("report_collected")
-                               else ("report=수집안함" if not collect_report else "report=미수집"))
+                                       period, odr=odr)
+                review_note = "review=OK" if meta.get("review_collected") else "review=미수집"
+                review_sep_note = ("review_sep=OK" if meta.get("review_sep_collected")
+                                   else "review_sep=미수집")
                 print(f"[run_live] {c} 완료 — rcept_no={meta['rcept_no']} "
-                      f"fs_divs={meta['fs_divs']} xbrl={len(meta['xbrl_files'])}개 "
-                      f"source={len(meta['source_files'])}개 {review_note} {report_note}")
+                      f"fs_divs={meta['fs_divs']} "
+                      f"source={len(meta['source_files'])}개 {review_note} {review_sep_note}")
             except Exception as e:
                 print(f"[run_live] {c} 수집 실패 - {e}", file=sys.stderr)
     print("[run_live] 완료. 표시용 PDF 가 없으면 main.py /api/library/upload 로 수동 업로드하세요.")
@@ -1320,9 +1082,6 @@ def run_live(companies: List[str], year: int, reprt_code: str,
 # ----------------------------------------------------------------------------
 # 오프라인 셀프테스트 (라이브 키 불필요)
 # ----------------------------------------------------------------------------
-# 보유 XBRL zip(검증용). 없으면 라벨 추출 테스트는 스킵.
-_SAMPLE_XBRL_ZIP = Path(r"C:\Users\2hryu\Downloads\[신한지주]분기보고서_IFRS(원문XBRL)(2026.05.15).zip")
-
 # corpCode.xml 매칭 픽스처 (4사명 포함 소형 XML)
 _CORP_CODE_FIXTURE = """<?xml version="1.0" encoding="utf-8"?>
 <result>
@@ -1355,7 +1114,7 @@ _FNLTT_ERROR_FIXTURE = {"status": "013", "message": "조회된 데이타가 없�
 
 
 def run_self_test() -> int:
-    """오프라인 검증: corpCode 매칭 / fnltt 파서 / (보유 시)XBRL 라벨 추출.
+    """오프라인 검증: corpCode 매칭 / fnltt 파서 / 검토보고서 picker / 매직넘버.
 
     라이브 키·HTTP 불필요. 실패 시 비0 종료코드.
     """
@@ -1409,29 +1168,8 @@ def run_self_test() -> int:
     except ValueError:
         print("    OK: status≠000 에 ValueError")
 
-    # 4) XBRL 라벨 추출 (보유 zip 있을 때만)
-    print("\n[4] XBRL _lab-ko.xml 한국어 라벨 추출")
-    if _SAMPLE_XBRL_ZIP.exists():
-        try:
-            lab = find_lab_ko_in_zip(_SAMPLE_XBRL_ZIP)
-            if lab is None:
-                print("    SKIP: zip 안에 _lab-ko.xml 없음")
-            else:
-                labels = extract_xbrl_labels(lab, limit=10)
-                print(f"    추출 라벨 {len(labels)}개(앞 10개):")
-                for lbl in labels:
-                    print(f"      - {lbl}")
-                if len(labels) >= 1:
-                    print("    OK")
-                else:
-                    print("    FAIL: 라벨 0개"); fails += 1
-        except Exception as e:
-            print(f"    FAIL: {e}"); fails += 1
-    else:
-        print(f"    SKIP: 보유 zip 없음 - {_SAMPLE_XBRL_ZIP}")
-
-    # 5) 검토보고서 후보 선택 — 연결검토보고서 > 검토보고서 우선순위
-    print("\n[5] 검토보고서 후보 선택 (연결검토 > 검토 우선)")
+    # 4) 검토보고서 후보 선택 — 연결검토보고서 > 검토보고서 우선순위
+    print("\n[4] 검토보고서 후보 선택 (연결검토 > 검토 우선)")
     try:
         # (a) 연결검토보고서가 있으면 그것을 우선 선택(검토보고서/감사보고서보다 앞)
         docs_a = [
@@ -1466,31 +1204,8 @@ def run_self_test() -> int:
     except Exception as e:
         print(f"    FAIL: {e}"); fails += 1
 
-    # 5b) 본문 보고서 PDF 선택 — attach_files dict 에서 .pdf 만, XBRL zip 배제
-    print("\n[5b] 본문 보고서 PDF 선택 (attach_files; XBRL zip 배제)")
-    try:
-        # 라이브 확인된 실제 형태: 본문 .pdf + XBRL 원문 .zip 공존
-        files_r = {
-            "[하나금융지주]분기보고서(2025.11.14).pdf": "u_pdf",
-            "[하나금융지주]분기보고서_IFRS(원문XBRL)(2025.11.14).zip": "u_zip",
-        }
-        picked_r = pick_report_pdf(files_r)
-        ok_r = picked_r is not None and picked_r[1] == "u_pdf"
-        print(f"    (a) 본문 PDF 선택(zip 배제): 선택={picked_r[0] if picked_r else None} "
-              f"{'OK' if ok_r else 'FAIL'}")
-        if not ok_r:
-            fails += 1
-        # .pdf 없고 zip 만 있으면 None
-        files_r2 = {"[KB금융]분기보고서_IFRS(원문XBRL)(2025.11).zip": "u_zip"}
-        ok_r2 = pick_report_pdf(files_r2) is None
-        print(f"    (b) zip 만 → None: {'OK' if ok_r2 else 'FAIL'}")
-        if not ok_r2:
-            fails += 1
-    except Exception as e:
-        print(f"    FAIL: {e}"); fails += 1
-
-    # 5c) 연결/별도 검토보고서 picker — 상호배타(실측 title)
-    print("\n[5c] 연결/별도 검토보고서 picker (연결∋'연결', 별도∌'연결')")
+    # 5) 연결/별도 검토보고서 picker — 상호배타(실측 title)
+    print("\n[5] 연결/별도 검토보고서 picker (연결∋'연결', 별도∌'연결')")
     try:
         # (a) 연결+별도 동시 첨부 → 두 picker 가 서로 다른 올바른 행 선택
         docs_both = [
@@ -1562,9 +1277,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "예시:\n"
             "  python collect_dart.py --companies 신한 KB 하나 우리 --year 2025 --reprt 11014 --dry-run\n"
-            "  python collect_dart.py --companies 신한 --year 2025 --reprt 11011   # 라이브(키 필요)\n"
+            "  python collect_dart.py --companies 신한 --year 2025 --reprt 11014   # 라이브(키 필요)\n"
             "  python collect_dart.py --self-test                                  # 오프라인 검증\n\n"
-            "reprt_code: 11013=Q1 11012=Q2(반기) 11014=Q3 11011=FY(사업)\n"
+            "reprt_code: 11013=Q1 11012=Q2(반기) 11014=Q3\n"
             "키: backend\\.env 의 DART_API_KEY (절대 인자로 넘기지 말 것)"
         ),
     )
@@ -1578,9 +1293,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="키 없이 호출 계획/저장경로만 출력(라이브 호출 안 함)")
     p.add_argument("--self-test", action="store_true",
                    help="오프라인 파서 셀프테스트(키 불필요)")
-    p.add_argument("--report-pdf", action="store_true",
-                   help="본문 보고서 PDF(report.pdf) 도 자동수집(무클로버: 기존 report.pdf 보존). "
-                        "OpenDartReader 필요. 하나/우리 등 '분기 –' 공백 셀 채우기용.")
     return p
 
 
@@ -1590,11 +1302,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.self_test:
         return run_self_test()
     if args.dry_run:
-        run_dry_run(args.companies, args.year, args.reprt,
-                    collect_report=args.report_pdf)
+        run_dry_run(args.companies, args.year, args.reprt)
         return 0
-    return run_live(args.companies, args.year, args.reprt,
-                    collect_report=args.report_pdf)
+    return run_live(args.companies, args.year, args.reprt)
 
 
 if __name__ == "__main__":

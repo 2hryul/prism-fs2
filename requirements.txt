@@ -8,7 +8,7 @@ uvicorn[standard]>=0.27,<0.35
 OpenDartReader>=0.2.2,<0.3
 requests>=2.31
 
-# 구조화/검증
+# OpenDartReader 전이 의존(첨부 파싱). 자체 코드는 표준 xml.etree 사용.
 lxml>=4.9.0
 
 # 검색 (오프라인 임베딩 + BM25). 부재 시 bigram 폴백.

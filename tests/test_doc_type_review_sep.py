@@ -1,9 +1,9 @@
-"""review_sep(별도검토보고서) 3-문서 모델 — 경로 매핑·원본명 폴백 단위테스트.
+"""review/review_sep(연결·별도 검토보고서) 2-문서 모델 — 경로 매핑·원본명 폴백 단위테스트.
 
 검증 범위:
-- pdf_path/index_path 의 review_sep 매핑(report/review 불변)
-- validate_doc_type("review_sep") 통과
-- original_pdf_name 폴백 스캔이 표준 작업본(report.pdf 등)을 원본으로 오인하지 않음
+- pdf_path/index_path 의 review/review_sep 매핑
+- validate_doc_type("review_sep") 통과·기본값 review
+- original_pdf_name 폴백 스캔이 표준 작업본(review.pdf 등)을 원본으로 오인하지 않음
 - original_pdf_name meta.json documents[] 우선
 """
 import sys
@@ -17,44 +17,39 @@ import app  # noqa: E402
 
 def test_validate_doc_type_review_sep():
     assert app.validate_doc_type("review_sep") == "review_sep"
-    # 하위호환: 미지정/빈값 → report
-    assert app.validate_doc_type(None) == "report"
-    assert app.validate_doc_type("") == "report"
+    # 미지정/빈값 → review(연결) 기본
+    assert app.validate_doc_type(None) == "review"
+    assert app.validate_doc_type("") == "review"
 
 
 def test_pdf_index_path_mapping(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "LIBRARY_ROOT", tmp_path)
     c, p = "신한", "2025Q3"
-    # report/review 파일명 불변 + review_sep 신규 매핑
-    assert app.pdf_path(c, p, "report").name == "report.pdf"
+    # review/review_sep 매핑
     assert app.pdf_path(c, p, "review").name == "review.pdf"
     assert app.pdf_path(c, p, "review_sep").name == "review_sep.pdf"
-    assert app.index_path(c, p, "report").name == "index.json"
     assert app.index_path(c, p, "review").name == "index_review.json"
     assert app.index_path(c, p, "review_sep").name == "index_review_sep.json"
 
 
 def test_original_pdf_name_fallback_excludes_standard(monkeypatch, tmp_path):
-    """폴백 스캔 — 표준 작업본 3종은 제외, bracketed 원본만 키워드 매칭."""
+    """폴백 스캔 — 표준 작업본 2종은 제외, bracketed 원본만 키워드 매칭."""
     monkeypatch.setattr(app, "LIBRARY_ROOT", tmp_path)
     c, p = "KB", "2025Q3"
     d = tmp_path / c / p
     d.mkdir(parents=True)
-    # 표준 작업본(오인 대상) + 원본 3종 합성
-    for fn in ("report.pdf", "review.pdf", "review_sep.pdf",
-               "[KB금융]분기보고서(2025.09).pdf",
+    # 표준 작업본(오인 대상) + 원본 합성
+    for fn in ("review.pdf", "review_sep.pdf",
                "[KB금융]연결검토보고서(2025.09).pdf",
                "[KB금융]검토보고서(2025.09).pdf"):
         (d / fn).write_bytes(b"%PDF-1.4 test")
 
-    # report: 분기보고서 & 검토 미포함 → 표준 report.pdf 가 아닌 bracketed 원본
-    assert app.original_pdf_name(c, p, "report") == "[KB금융]분기보고서(2025.09).pdf"
     # review: 연결검토 포함
     assert app.original_pdf_name(c, p, "review") == "[KB금융]연결검토보고서(2025.09).pdf"
     # review_sep: 검토 포함 & 연결 미포함 → 연결검토본은 배제
     assert app.original_pdf_name(c, p, "review_sep") == "[KB금융]검토보고서(2025.09).pdf"
     # 어떤 결과도 표준 작업본 파일명이 아님
-    for dt in ("report", "review", "review_sep"):
+    for dt in ("review", "review_sep"):
         assert app.original_pdf_name(c, p, dt) not in app._STANDARD_PDF_NAMES
 
 
@@ -78,5 +73,5 @@ def test_original_pdf_name_none_when_empty(monkeypatch, tmp_path):
     c, p = "우리", "2025Q3"
     d = tmp_path / c / p
     d.mkdir(parents=True)
-    (d / "report.pdf").write_bytes(b"%PDF-1.4 test")
+    (d / "review.pdf").write_bytes(b"%PDF-1.4 test")
     assert app.original_pdf_name(c, p, "review_sep") is None

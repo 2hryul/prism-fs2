@@ -14,14 +14,11 @@ import pytest  # noqa: E402
 skip_no_data = pytest.mark.skipif(not HAS_DATA, reason="신한 2026Q1 fs_structured.json 미수집")
 
 
-def test_cmp_col_fy_uses_annual_prior():
+def test_cmp_col_quarter_autoselect():
     # 분기: 손익=전기동기(frmtrm_q), 재무상태표=전기말(frmtrm)
     assert fs_compare.cmp_col("CIS", "2026Q1")[0] == "frmtrm_q"
+    assert fs_compare.cmp_col("IS", "2026Q1")[0] == "frmtrm_q"
     assert fs_compare.cmp_col("BS", "2026Q1")[0] == "frmtrm"
-    # 연간(FY): 손익은 전기 연간(frmtrm) 비교, BS 는 그대로 frmtrm
-    assert fs_compare.cmp_col("CIS", "2025FY")[0] == "frmtrm"
-    assert fs_compare.cmp_col("IS", "2025FY")[0] == "frmtrm"
-    assert fs_compare.cmp_col("BS", "2025FY")[0] == "frmtrm"
 
 
 def test_to_int_preserves_sign_and_bigint():

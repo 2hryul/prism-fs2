@@ -59,7 +59,7 @@
   .matrix-cell:hover .cell-del { opacity: 0.55; }
   .cell-del:hover { opacity: 1; }
   .doc-pill.indexing { background: #fef3c7; border-color: #f59e0b; }
-  /* 검토보고서(review/review_sep) pill — 사업보고서(report)와 시각 구분: 옅은 보라 보더 + 위 구분선 */
+  /* 검토보고서(review/review_sep) pill — 옅은 보라 보더 + 위 구분선 */
   .doc-pill.review { border-color: #c4b5fd; margin-top: 4px; border-top-width: 1px; }
   .doc-pill.review:hover { border-color: #7c3aed; }
   .doc-pill.review.selected { background: #7c3aed; border-color: #7c3aed; color: #ffffff; }
@@ -313,7 +313,6 @@
     <button class="tab" data-tab="rag" onclick="showTab('rag')">🤖 주석 자연어 질의 (AI 보조)</button>
     <button class="tab" data-tab="fs" onclick="showTab('fs')">📈 재무제표 비교</button>
     <button class="tab" data-tab="coverage" onclick="showTab('coverage')">🧭 커버리지·공시갭</button>
-    <button class="tab" data-tab="xbrl" onclick="showTab('xbrl')">🏷️ 주석 XBRL 태깅</button>
   </div>
 
   <!-- Tab: Library -->
@@ -328,7 +327,6 @@
 
     <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-bottom:8px; font-size:12px; color:#374151;">
       <span style="color:#6b7280; font-weight:600;">프리셋 적용 문서:</span>
-      <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="report" style="width:auto;"> 📄 사업보고서</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review_sep" style="width:auto;"> 🏢 별도재무제표</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review" style="width:auto;"> 🔗 연결재무제표</label>
     </div>
@@ -408,7 +406,7 @@
     </p>
     <div class="search-bar">
       <input type="text" id="rag-q" placeholder="예: 4사 중 공정가치 Level 3 민감도 분석을 공시한 곳과 그 가정은?">
-      <select id="rag-doctype" title="문서유형"><option value="report">사업보고서</option><option value="review_sep">별도재무제표</option><option value="review">연결재무제표</option></select>
+      <select id="rag-doctype" title="문서유형"><option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option></select>
       <select id="rag-fsdiv" style="display:none;"><option value="연결">연결</option><option value="별도">별도</option></select>
       <select id="rag-kind" title="주석 종류"><option value="전체">전체</option><option value="주기">주기</option><option value="서술형">서술형</option></select>
       <button class="btn" style="background:#5b21b6;" onclick="doRag()">질의</button>
@@ -509,7 +507,6 @@
       <button class="preset-btn fs-view" data-view="ts" onclick="showFsView('ts')">⑤ 시계열 추이</button>
       <button class="preset-btn fs-view" data-view="flags" onclick="showFsView('flags')">⑥ 이상치 플래그</button>
       <button class="preset-btn fs-view" data-view="adj" onclick="showFsView('adj')">⑦ 연결조정 상세</button>
-      <button class="preset-btn fs-view" data-view="refs" onclick="showFsView('refs')">⑧ 주석 정합참조</button>
     </div>
 
     <div id="fs-controls" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px;"></div>
@@ -535,7 +532,7 @@
         <div class="field" style="min-width:120px;">
           <label style="font-size:12px;color:#6b7280;font-weight:600;">문서</label>
           <select id="cov-doctype" onchange="onInsightDoctypeChange()" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-            <option value="report">사업보고서</option><option value="review_sep">별도재무제표</option><option value="review">연결재무제표</option>
+            <option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option>
           </select>
         </div>
         <div class="field" style="min-width:100px;display:none;">
@@ -591,32 +588,6 @@
     </div>
   </div>
 
-  <!-- ===== 주석 XBRL 태깅 진단 ===== -->
-  <div id="tab-xbrl" class="panel hidden">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-      <div>
-        <h2 style="font-size:17px; font-weight:700;">🏷️ 주석 XBRL 상세태깅 진단</h2>
-        <p style="color:#6b7280; font-size:13px; margin-top:4px;">DART 원본 XBRL(이미 수집됨)을 결정론으로 분석 — 주석이 XBRL로 <strong>어디까지 태깅</strong>됐는지. 네트워크·AI 무경유.</p>
-      </div>
-    </div>
-
-    <h3 style="font-size:15px; font-weight:700; margin-top:18px;">A. 4사 × 분기 횡단 매트릭스 <span style="font-size:11px;color:#3730a3;background:#e0e7ff;border-radius:999px;padding:2px 9px;font-weight:700;">기간편차</span></h3>
-    <p style="color:#6b7280; font-size:12px; margin-top:2px;">fact 깊이·서술(텍스트블록) 태깅·세부공시 사용률·PDF 주석 매칭률. 셀 클릭 시 아래 상세.</p>
-    <div class="matrix-wrap"><table class="cov-table" id="xbrl-matrix"><tr><td class="empty-note">불러오는 중…</td></tr></table></div>
-
-    <h3 style="font-size:15px; font-weight:700; margin-top:26px;">B. 셀 상세</h3>
-    <div class="search-bar" style="margin-top:8px; align-items:center;">
-      <select id="xbrl-company" style="min-width:110px;"></select>
-      <select id="xbrl-period" style="min-width:120px;"></select>
-      <button class="btn" onclick="loadXbrlCell()">진단 보기</button>
-    </div>
-    <div id="xbrl-cell"></div>
-
-    <div class="footer-note">
-      ℹ️ 본 진단은 보고서별로 제출된 XBRL instance·presentation linkbase·taxonomy(roleType) 를 그대로 집계한 결과입니다(차원 미고려=dimension-naive, 1차). 숫자 재구성·AI 생성 없음. <strong>L1</strong>=선언 대비 사용 주석 롤, <strong>L2</strong>=롤별 fact 충실도(숫자/서술), <strong>L3</strong>=PDF 주석 대비 XBRL 태깅 대조.
-    </div>
-  </div>
-
 </div>
 
 <div id="fs-pop" style="position:fixed; z-index:50; max-width:360px; background:#111827; color:#f3f4f6; border-radius:8px; padding:11px 13px; font-size:12px; line-height:1.6; box-shadow:0 6px 24px rgba(0,0,0,.3); display:none;">
@@ -635,7 +606,7 @@
 
   <!-- 서브탭 ①: DART 자동 수집 -->
   <div id="add-sub-collect" class="modal-body">
-    <p style="color:#6b7280; font-size:12.5px; margin-bottom:12px;">DART OpenAPI에서 분기/검토보고서 PDF·재무제표·XBRL을 자동 수집해 인덱싱합니다. (<code>.env</code> DART_API_KEY 필요)</p>
+    <p style="color:#6b7280; font-size:12.5px; margin-bottom:12px;">DART OpenAPI에서 연결·별도 검토보고서 PDF·재무제표를 자동 수집해 인덱싱합니다. (<code>.env</code> DART_API_KEY 필요)</p>
     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
       <div class="field" style="min-width:140px;">
         <label style="font-size:12px; color:#065f46;">회사</label>
@@ -650,9 +621,8 @@
         <select id="add-type"></select>
       </div>
       <div class="field">
-        <label style="font-size:12px; color:#065f46;">수집 문서 <span style="color:#6b7280; font-weight:400;">(재무데이터·XBRL은 항상 수집)</span></label>
+        <label style="font-size:12px; color:#065f46;">수집 문서 <span style="color:#6b7280; font-weight:400;">(재무데이터는 항상 수집)</span></label>
         <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; padding:9px 0; font-size:13px;">
-          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-report" checked style="width:auto;"> 📄 보고서 본문</label>
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review-sep" checked style="width:auto;"> 🏢 별도재무제표 검토보고서</label>
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review" checked style="width:auto;"> 🔗 연결재무제표 검토보고서</label>
         </div>
@@ -688,9 +658,8 @@
       <div class="field">
         <label>문서 유형</label>
         <select id="up-doctype">
-          <option value="report">📄 사업보고서</option>
-          <option value="review_sep">🏢 별도재무제표</option>
           <option value="review">🔗 연결재무제표</option>
+          <option value="review_sep">🏢 별도재무제표</option>
         </select>
       </div>
       <div class="field" style="grid-column:1 / -1;">
@@ -719,23 +688,23 @@
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   let LIBRARY = { matrix: {}, available_periods: [], entries: [] };
 
-  // ----- 기간(분기/연간) 헬퍼 — 하드코딩 드롭다운 제거, 임의 연도·유형 추가 가능 -----
+  // ----- 기간(분기) 헬퍼 — 하드코딩 드롭다운 제거, 임의 연도·유형 추가 가능 -----
   const PERIOD_TYPES = [
     { v: "Q1", ko: "1분기" }, { v: "Q2", ko: "반기" },
-    { v: "Q3", ko: "3분기" }, { v: "FY", ko: "사업보고서(연간)" },
+    { v: "Q3", ko: "3분기" },
   ];
-  const _PORDER = { Q1: 1, Q2: 2, Q3: 3, Q4: 4, FY: 5 };
+  const _PORDER = { Q1: 1, Q2: 2, Q3: 3 };
   function periodYears() {  // 현재연도 ~ −5 (브라우저 시각 기준)
     const y = new Date().getFullYear();
     return Array.from({ length: 7 }, (_, i) => y - i);  // 미래분기 대비 +당해
   }
   function composePeriod(year, type) { return `${year}${type}`; }
-  function periodSortKey(p) {  // (연도, 분기순) — FY 는 Q3 뒤(연말)
+  function periodSortKey(p) {  // (연도, 분기순)
     const y = parseInt((p || "").slice(0, 4), 10);
     return [isNaN(y) ? 9999 : y, _PORDER[(p || "").slice(4)] || 9];
   }
-  function periodLabel(p) {  // 매트릭스 헤더 라벨 — FY 는 (연간) 표기
-    return (p || "").endsWith("FY") ? `${p.slice(0, 4)}FY (연간)` : p;
+  function periodLabel(p) {  // 매트릭스 헤더 라벨
+    return p;
   }
   // 사용자가 추가한 빈 기간 컬럼(데이터 없이 노출 → 셀 클릭 수집). localStorage 보존.
   let EXTRA_PERIODS = new Set(JSON.parse(localStorage.getItem("extraPeriods") || "[]"));
@@ -754,20 +723,19 @@
     fillTypeSelect("up-type", "Q3"); fillTypeSelect("add-type", "Q3");
   }
   let SELECTED = new Set();      // "회사/기간#docType#연결|별도" (문서·fs_div 1급 축, 메모리 전용·미영속)
-  let INDEX_STATUS_MAP = {};     // "회사/기간/report" -> status (인덱싱 진행상태는 report 기준)
+  let INDEX_STATUS_MAP = {};     // "회사/기간/review" -> status (인덱싱 진행상태)
 
-  // 문서 카테고리(3종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
-  //   report     = 사업보고서(연결+별도 주석 포함, fs_div=all)
+  // 문서 카테고리(2종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
   //   review     = 연결재무제표(검토보고서·연결)
   //   review_sep = 별도재무제표(검토보고서·별도)
   const FS_DIVS = ["연결", "별도"];
   const FSDIV_ICON = { 연결: "🔗", 별도: "🏢" };
   const FSDIV_FULL = { 연결: "연결재무제표", 별도: "별도재무제표" };
-  const DOC_ICON = { report: "📄", review: "🔗", review_sep: "🏢" };
-  const DOC_FULL = { report: "사업보고서", review: "연결재무제표", review_sep: "별도재무제표" };
-  const DOC_SHORT = { report: "사업", review: "연결", review_sep: "별도" };
-  // doc_type → fs_div 파생(단일 출처). report 는 전체(all), review=연결, review_sep=별도.
-  const DOC_FSDIV = { report: "all", review: "연결", review_sep: "별도" };
+  const DOC_ICON = { review: "🔗", review_sep: "🏢" };
+  const DOC_FULL = { review: "연결재무제표", review_sep: "별도재무제표" };
+  const DOC_SHORT = { review: "연결", review_sep: "별도" };
+  // doc_type → fs_div 파생(단일 출처). review=연결, review_sep=별도.
+  const DOC_FSDIV = { review: "연결", review_sep: "별도" };
   function fsDivFor(d) { return DOC_FSDIV[d] || "연결"; }
 
   // SELECTED 키 헬퍼: "회사/기간#docType#fsDiv" (fsDiv 는 fsDivFor(doc) 파생값)
@@ -775,35 +743,19 @@
   function parseSelKey(key) {
     const [cp, docType, fsdiv] = key.split("#");
     const [company, period] = cp.split("/");
-    return { company, period, docType: docType || "report", fsdiv: fsdiv || "연결" };
+    return { company, period, docType: docType || "review", fsdiv: fsdiv || "연결" };
   }
-  // 해당 셀에 그 fs_div 주석이 인덱싱됐는지 (report 인덱싱 + 해당 fs_div 주석수>0)
-  function fsIndexed(entry, fsdiv) {
-    if (!entry || !entry.indexed) return false;
-    return (entry["notes_count_" + fsdiv] || 0) > 0;
-  }
-  function fsNotesCount(entry, fsdiv) {
-    if (!entry) return null;
-    return entry["notes_count_" + fsdiv] || 0;
-  }
-  // 문서 카테고리별 인덱싱 여부: report→entry.indexed, review→review_indexed, review_sep→review_sep_indexed
+  // 문서 카테고리별 인덱싱 여부: review→review_indexed, review_sep→review_sep_indexed
   function docIndexed(entry, docType) {
     if (!entry) return false;
-    if (docType === "review") return !!entry.review_indexed;
     if (docType === "review_sep") return !!entry.review_sep_indexed;
-    return !!entry.indexed;
+    return !!entry.review_indexed;
   }
-  // 문서 카테고리별 주석수(전체):
-  //   report     = notes_count_연결+notes_count_별도 (없으면 notes_count)
-  //   review     = review_notes_count
-  //   review_sep = review_sep_notes_count
+  // 문서 카테고리별 주석수(전체): review→review_notes_count, review_sep→review_sep_notes_count
   function docCount(entry, docType) {
     if (!entry) return 0;
-    if (docType === "review") return entry.review_notes_count || 0;
     if (docType === "review_sep") return entry.review_sep_notes_count || 0;
-    const conn = entry.notes_count_연결, sep = entry.notes_count_별도;
-    if (conn != null || sep != null) return (conn || 0) + (sep || 0);
-    return entry.notes_count || 0;
+    return entry.review_notes_count || 0;
   }
   // 원본 보고서 파일명(요구③): LIBRARY.entries 의 ${docType}_filename_original (없으면 null)
   function docOrigName(company, period, docType) {
@@ -893,7 +845,7 @@
     document.querySelectorAll(".tab").forEach(t => {
       t.classList.toggle("active", t.dataset.tab === name);
     });
-    ["library","compare","rag","fs","coverage","xbrl"].forEach(n => {
+    ["library","compare","rag","fs","coverage"].forEach(n => {
       const el = document.getElementById(`tab-${n}`);
       if (el) el.classList.toggle("hidden", n !== name);
     });
@@ -904,7 +856,6 @@
     if (name === "compare") renderTargetsBar();
     if (name === "fs") loadFsTab();
     if (name === "coverage") loadInsight();
-    if (name === "xbrl") loadXbrlTagging();
   }
 
   // RAG 탭 서브탭 전환 (자연어 질의 / 온톨로지). 온톨로지 진입 시 그래프 재가열.
@@ -936,7 +887,7 @@
   }
 
   function renderMatrix() {
-    // 보유 기간 ∪ 사용자가 추가한 빈 컬럼 → 기간순(FY 는 연말) 정렬
+    // 보유 기간 ∪ 사용자가 추가한 빈 컬럼 → 기간순 정렬
     const base = LIBRARY.available_periods.length > 0
       ? LIBRARY.available_periods
       : ["2025Q2", "2025Q3", "2026Q1"];
@@ -945,59 +896,56 @@
 
     const table = document.getElementById("matrix-table");
     let html = `<tr><th class="company-col">회사 \\ 기간</th>` +
-      periods.map(p => `<th${p.endsWith("FY") ? ' style="background:#fffbeb;"' : ''}>${periodLabel(p)}</th>`).join("") + `</tr>`;
+      periods.map(p => `<th>${periodLabel(p)}</th>`).join("") + `</tr>`;
 
     for (const c of COMPANIES) {
       html += `<tr><th class="company-col">${c}</th>`;
       for (const p of periods) {
         const entry = LIBRARY.entries.find(e => e.company === c && e.period === p);
-        // 셀 채움 기준: 문서 3종(report/review/review_sep) 중 하나라도 인덱싱·진행 중,
-        // 또는 본문 PDF 없이 재무데이터(XBRL)만 수집된 등록 상태.
-        const anyIndexed = entry && (entry.indexed || entry.review_indexed || entry.review_sep_indexed);
-        const st0 = INDEX_STATUS_MAP[`${c}/${p}/report`];
-        const anyRunning = entry && ["report", "review", "review_sep"].some(d => {
+        // 셀 채움 기준: 문서 2종(review/review_sep) 중 하나라도 인덱싱·진행 중,
+        // 또는 검토보고서 PDF 없이 재무데이터만 수집된 등록 상태.
+        const anyIndexed = entry && (entry.review_indexed || entry.review_sep_indexed);
+        const anyRunning = entry && ["review", "review_sep"].some(d => {
           const s = INDEX_STATUS_MAP[`${c}/${p}/${d}`]; return s && s.status === "running";
         });
-        // 수집은 됐으나 주석 미인덱싱(본문 PDF 미확보 등) → 빈칸 대신 '등록됨'으로 표시.
+        // 수집은 됐으나 주석 미인덱싱(PDF 미확보 등) → 빈칸 대신 '등록됨'으로 표시.
         const collectedOnly = entry && !anyIndexed && !anyRunning &&
-          (entry.fs_collected || entry.report_collected || entry.review_collected || entry.review_sep_collected);
+          (entry.fs_collected || entry.review_collected || entry.review_sep_collected);
 
         let inner, cls;
         if (entry && (anyIndexed || anyRunning || collectedOnly)) {
-          // 3-문서 카테고리 pill: 📄사업보고서 / 🏢별도재무제표 / 🔗연결재무제표
-          const combos = [{ doc: "report" }, { doc: "review_sep" }, { doc: "review" }];
+          // 2-문서 카테고리 pill: 🔗연결재무제표 / 🏢별도재무제표
+          const combos = [{ doc: "review" }, { doc: "review_sep" }];
           inner = `<div class="doc-pills">` + combos.map(({ doc }) => {
-            const fd = fsDivFor(doc);                     // doc → fs_div 파생(report=all)
-            const isReport = doc === "report";
-            // 검토보고서 2종(별도/연결)은 시각 구분 유지 — report 아래에 보더 처리.
-            const reviewCls = isReport ? "" : " review";
+            const fd = fsDivFor(doc);                     // doc → fs_div 파생
             const label = `${DOC_ICON[doc]} ${DOC_FULL[doc]}`;
             const ttl = DOC_FULL[doc];
-            // 인덱싱 진행표시는 report(사업보고서) 기준만. 나머지는 카운트 기반.
-            if (st0 && st0.status === "running" && isReport) {
-              return `<div class="doc-pill indexing${reviewCls}" title="${ttl}">
+            // 인덱싱 진행표시는 해당 문서 단위로.
+            const st = INDEX_STATUS_MAP[`${c}/${p}/${doc}`];
+            if (st && st.status === "running") {
+              return `<div class="doc-pill indexing review" title="${ttl}">
                         <span class="dp-label">${label}</span>
-                        <span class="dp-count">${Math.round((st0.progress||0)*100)}%</span></div>`;
+                        <span class="dp-count">${Math.round((st.progress||0)*100)}%</span></div>`;
             }
             const cnt = docCount(entry, doc);
             if (!docIndexed(entry, doc) || !cnt) {
               // 해당 문서 카테고리 미인덱싱 → 클릭 시 자료추가 모달을 이 셀·문서로 프리셋
-              return `<div class="doc-pill absent${reviewCls}" style="cursor:pointer;"
+              return `<div class="doc-pill absent review" style="cursor:pointer;"
                         title="${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다"
                         onclick="event.stopPropagation();onAbsentDocClick('${c}','${p}','${doc}')">
                         <span class="dp-label">${label}</span>
                         <span class="dp-count">–</span></div>`;
             }
             const isSel = SELECTED.has(selKey(c, p, doc, fd));
-            return `<div class="doc-pill${isSel ? ' selected' : ''}${reviewCls}" title="${ttl}"
+            return `<div class="doc-pill${isSel ? ' selected' : ''} review" title="${ttl}"
                         onclick="onDocClick('${c}','${p}','${doc}','${fd}',event)">
                       <span class="dp-label">${isSel ? '✓ ' : ''}${label}</span>
                       <span class="dp-count">${cnt}</span>
                       <span class="dp-del" title="${ttl} 삭제" onclick="event.stopPropagation();deleteDoc('${c}','${p}','${doc}')">✕</span></div>`;
           }).join("") + `</div>`;
-          // 재무데이터만 수집된 등록 상태 — 빈 셀과 구분되는 안내(본문 PDF 업로드 시 주석 추출).
+          // 재무데이터만 수집된 등록 상태 — 빈 셀과 구분되는 안내(검토보고서 PDF 수집 시 주석 추출).
           if (collectedOnly) {
-            inner += `<div style="font-size:10px;color:#6b7280;margin-top:5px;text-align:center;" title="DART 재무데이터(XBRL) 수집 완료. 주석 추출은 본문 PDF 업로드 후 가능합니다.">📊 재무데이터 수집됨 · 본문 PDF 필요</div>`;
+            inner += `<div style="font-size:10px;color:#6b7280;margin-top:5px;text-align:center;" title="DART 재무데이터 수집 완료. 주석 추출은 검토보고서 PDF 수집 후 가능합니다.">📊 재무데이터 수집됨 · 검토보고서 PDF 필요</div>`;
           }
           cls = anyRunning ? "indexing" : "filled";
         } else {
@@ -1018,7 +966,7 @@
 
   // ----- 인덱스 이식(내보내기/가져오기) — GPU 없는 PC 재활용(Phase5b) -----
   window.exportLibrary = function() {
-    // 서버가 zip 생성(인덱스·PDF·재무데이터, xbrl/source 원본 제외) → 브라우저 다운로드
+    // 서버가 zip 생성(인덱스·PDF·재무데이터, source 원본 제외) → 브라우저 다운로드
     toast("내보내기 zip 생성 중... (수백 MB — 잠시 걸릴 수 있습니다)");
     window.open(`${API}/api/library/export`, "_blank");
   };
@@ -1059,11 +1007,9 @@
   // 미수집 문서 pill(–) 클릭 → 모달을 회사·기간으로 프리셋 + 해당 문서만 수집 선택(누락분 1클릭 수집 준비)
   window.onAbsentDocClick = function(company, period, docType) {
     presetAddModal(company, period);
-    document.getElementById("add-report").checked = docType === "report";
     document.getElementById("add-review").checked = docType === "review";
     document.getElementById("add-review-sep").checked = docType === "review_sep";
-    const docLabel = docType === "report" ? reportDocLabel(period)
-      : `${DOC_ICON[docType]} ${DOC_FULL[docType]} 검토보고서`;
+    const docLabel = `${DOC_ICON[docType]} ${DOC_FULL[docType]} 검토보고서`;
     document.getElementById("add-status").innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} · ${docLabel} <b>미수집</b> — <b>[DART 수집]</b>을 누르면 이 문서를 수집합니다. (수동 업로드는 'PDF 업로드' 서브탭)</div>`;
   };
 
@@ -1126,10 +1072,10 @@
   };
 
   // ----- Presets -----
-  // 프리셋 적용 문서유형: 체크박스에서 선택된 doc_type 목록(없으면 사업보고서 기본).
+  // 프리셋 적용 문서유형: 체크박스에서 선택된 doc_type 목록(없으면 연결재무제표 기본).
   function presetDocTypes() {
     const checked = [...document.querySelectorAll(".preset-doctype:checked")].map(c => c.value);
-    return checked.length ? checked : ["report"];
+    return checked.length ? checked : ["review"];
   }
   // 체크된 각 문서유형 중 해당 셀에 인덱싱된 것만 선택에 추가(doc_type별 fs_div 파생).
   function addDefaultSelection(company, period) {
@@ -1209,7 +1155,7 @@
   window.doUpload = async function() {
     const company = document.getElementById("up-company").value;
     const period = composePeriod(document.getElementById("up-year").value, document.getElementById("up-type").value);
-    const docType = document.getElementById("up-doctype").value;  // 사업보고서/별도재무제표/연결재무제표
+    const docType = document.getElementById("up-doctype").value;  // 연결재무제표/별도재무제표
     const file = document.getElementById("up-file").files[0];
     if (!file) return toast("PDF 파일을 선택하세요.");
     // 감지 결과와 선택이 다르면 업로드 전 최종 확인 — 잘못된 셀(기간/문서) 등록 방지.
@@ -1255,7 +1201,6 @@
     t = t || "";
     if (t.includes("연결검토")) return "review";
     if ((t.includes("검토") || t.includes("감사")) && !t.includes("연결")) return "review_sep";
-    if ((t.includes("분기") || t.includes("반기") || t.includes("사업보고서")) && !t.includes("검토") && !t.includes("감사")) return "report";
     if (t.includes("연결") && (t.includes("검토") || t.includes("감사"))) return "review";
     return null;
   }
@@ -1265,8 +1210,7 @@
     const year = m ? m[1] : null;
     const mon = (m && m[2]) ? parseInt(m[2], 10) : null;
     let suffix = null;
-    if (t.includes("사업보고서")) suffix = "FY";
-    else if (t.includes("반기")) suffix = "Q2";          // 반기를 분기보다 먼저
+    if (t.includes("반기")) suffix = "Q2";               // 반기를 분기보다 먼저
     else if (t.includes("분기")) {
       if (mon != null && mon >= 3 && mon <= 6) suffix = "Q1";
       else if (mon != null && (mon >= 10 || mon <= 2)) suffix = "Q3";
@@ -1374,13 +1318,6 @@
     }, 800);
   }
 
-  // 본문 보고서 라벨 — 기간 인지(FY=사업/Q2=반기/Q1·Q3=분기). 검토 2종과 명확 구분.
-  function reportDocLabel(period) {
-    const sfx = (period || "").slice(4);
-    const nm = sfx === "FY" ? "사업보고서" : (sfx === "Q2" ? "반기보고서" : "분기보고서");
-    return `${DOC_ICON.report} ${nm}(본문)`;
-  }
-
   // 수집 완료/부분실패 상세 블록 — 원본 보고서명·문서별 파일명·인덱싱·재무 fs_div·저장경로.
   // 이번 런 결과(✓ 신규/✗ 실패)와 기존 보유 파일(보유)을 구분해 "안 받은 문서를 받았다"는 오인 차단.
   function renderCollectDetail(item, company, period, headline) {
@@ -1388,19 +1325,13 @@
     const req = item.requested || {};                 // 구버전 상태엔 없음 → 전부 요청으로 간주
     const fails = item.fetch_failures || {};
     const isReq = dt => req[dt] !== false;
-    const docTypes = ["report", "review_sep", "review"];
+    const docTypes = ["review_sep", "review"];
     const anyFail = docTypes.some(dt => isReq(dt) && fails[dt]);
     if (anyFail) headline = headline.replace("✓", "⚠") + " — 일부 문서 실패";
     const rows = docTypes.map(dt => {
-      const label = dt === "report" ? reportDocLabel(period)
-        : `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
+      const label = `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
       const d = (item.documents || []).find(x => x.doc_type === dt);
       if (!d || !d.collected) {
-        if (d && d.manual_upload_required) {
-          return `<tr><td ${td}>${label}</td><td ${td}>–</td>
-                  <td ${td} colspan="2" style="color:#b45309;">본문 PDF 미제공 — PDF 업로드 탭에서 수동 업로드</td>
-                  <td ${td}>–</td></tr>`;
-        }
         if (isReq(dt) && fails[dt]) {
           // 요청했으나 실패 — 행 전체 강조 + 사유 + 사용자가 직접 받을 수 있는 DART 링크 제공
           const f = fails[dt];
@@ -1445,8 +1376,8 @@
               <td ${td}${dartTtl}>${orig}</td><td ${td}>${saved}</td><td ${td}>${idx}</td></tr>`;
     }).join("");
     const fs = (item.fs_divs || []);
-    const fsLine = `🔗 연결 재무데이터(XBRL) ${fs.includes("CFS") ? "✓" : "–"} · ` +
-                   `🏢 별도 재무데이터(XBRL) ${fs.includes("OFS") ? "✓" : "–"}`;
+    const fsLine = `🔗 연결 재무데이터 ${fs.includes("CFS") ? "✓" : "–"} · ` +
+                   `🏢 별도 재무데이터 ${fs.includes("OFS") ? "✓" : "–"}`;
     const rcept = item.rcept_no ? ` <span style="color:#6b7280;">(접수번호 ${escapeHtml(item.rcept_no)})</span>` : "";
     const nm = item.report_nm ? ` — ${escapeHtml(item.report_nm)}` : "";
     return `<div style="font-weight:600;">${headline}${nm}${rcept}</div>
@@ -1461,13 +1392,12 @@
   }
 
   // ----- DART 자동 수집 (공용 코어 — 업로드 탭·라이브러리 패널 공유) -----
-  // docSel: 수집할 문서 선택 {report, review, review_sep} (불리언). 재무데이터는 항상 수집.
+  // docSel: 수집할 문서 선택 {review, review_sep} (불리언). 재무데이터는 항상 수집.
   function startCollect(company, period, docSel, statusEl) {
     statusEl.innerHTML = `<div class="info-banner">DART에서 ${company}·${periodLabel(period)} 수집 시작...</div>`;
     return fetch(`${API}/api/library/collect`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ company, period,
-        include_report_pdf: !!docSel.report,
         include_review: !!docSel.review,
         include_review_sep: !!docSel.review_sep }),
     }).then(async res => {
@@ -1491,10 +1421,10 @@
               renderCollectDetail(item, company, period, `✓ ${company}·${periodLabel(period)} 수집 완료`) + `</div>`;
           } else {
             // 구버전 상태/상세 부재 폴백 — 기존 한 줄 요약 유지
-            const rep = item.report_collected ? "분기보고서 ✓" : "분기보고서 –";
-            const rev = item.review_collected ? "검토 ✓" : "검토 –";
+            const rev = item.review_collected ? "연결검토 ✓" : "연결검토 –";
+            const revs = item.review_sep_collected ? "별도검토 ✓" : "별도검토 –";
             const idx = (item.indexed || []).length ? ` · 인덱싱: ${item.indexed.join(", ")}` : "";
-            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rep} / ${rev}${idx}</div>`;
+            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rev} / ${revs}${idx}</div>`;
           }
           loadLibrary(); resolve(true);
         } else if (item.status === "error") {
@@ -1547,7 +1477,6 @@
     const companySel = document.getElementById("add-company").value;
     const period = composePeriod(document.getElementById("add-year").value, document.getElementById("add-type").value);
     const docSel = {
-      report: document.getElementById("add-report").checked,
       review: document.getElementById("add-review").checked,
       review_sep: document.getElementById("add-review-sep").checked,
     };
@@ -1597,7 +1526,7 @@
     const mode = document.getElementById("mode").value;
     if (!q) return toast("검색어를 입력하세요.");
 
-    // 선택 축: 문서(report/review) + fs_div(연결/별도). 백엔드가 doc_type별 인덱스 선택.
+    // 선택 축: 문서(review/review_sep) + fs_div(연결/별도). 백엔드가 doc_type별 인덱스 선택.
     const targets = [...SELECTED].map(k => {
       const { company, period, docType, fsdiv } = parseSelKey(k);
       return { company, period, doc_type: docType, fs_div: fsdiv };
@@ -1615,7 +1544,7 @@
     // C1: matches = 타깃 단위 객체(candidates 보유). 후보≥1 타깃 수가 "매칭 결과".
     const matched = data.matches.filter(m => (m.candidates || []).length > 0);
     let info = `<div class="info-banner"><strong>"${escapeHtml(q)}"</strong> 매칭 결과 (${matched.length}개): `;
-    info += matched.map(m => `${DOC_ICON[m.doc_type || 'report']} ${m.company}·${m.period} #${m.candidates[0].note_no}`).join(" · ");
+    info += matched.map(m => `${DOC_ICON[m.doc_type || 'review']} ${m.company}·${m.period} #${m.candidates[0].note_no}`).join(" · ");
     info += `</div>`;
 
     if (data.unit_warning) {
@@ -1632,7 +1561,7 @@
     grid.className = "compare-grid cols-" + (matched.length <= 1 ? 1 : matched.length <= 4 ? 2 : 3);
 
     grid.innerHTML = matched.map((m, i) => {
-      const dt = m.doc_type || "report";
+      const dt = m.doc_type || "review";
       const unit = m.detected_unit ? ` <span style="color:#6b7280;font-weight:normal;">(단위: ${m.detected_unit})</span>` : "";
       // 5h: 원본 보고서명을 항상 표기(없으면 DOC_FULL·회사·기간 폴백 — 빈칸 금지).
       const orig = docOrigName(m.company, m.period, dt);
@@ -1640,21 +1569,11 @@
       const rows = m.candidates.map((c, j) => {
         const low = c.confidence !== "high"
           ? ' <span class="badge-low">낮은 신뢰도</span>' : '';
-        // Phase3: XBRL 계정 크로스링크 — 주석과 의미 연결된 재무 계정·금액(보조 정보)
-        const fsLinks = (c.fs_links || []).map(l => {
-          const amt = l.amount && /^-?\d+$/.test(String(l.amount))
-            ? Number(l.amount).toLocaleString("ko-KR") : (l.amount || "");
-          return `<span style="display:inline-block;background:#eef2ff;color:#3730a3;border-radius:4px;
-            padding:0 6px;margin:1px 3px 0 0;font-size:11px;" title="XBRL ${l.sj_div || ''} · 유사도 ${l.sim}">
-            💰 ${escapeHtml(l.account_nm)}${amt ? ' ' + amt : ''}</span>`;
-        }).join("");
-        const fsLine = fsLinks
-          ? `<div style="margin:2px 0 0 26px;line-height:1.7;">${fsLinks}</div>` : "";
         return `<div class="cand-row${j === 0 ? ' sel' : ''}" data-panel="${i}" data-cand="${j}"
             onclick="selectCandidate(${i}, ${j})">
           <span class="rk">${j + 1}</span>
           <span class="nm">주석 ${c.note_no} · ${escapeHtml(c.title)}</span>
-          <span class="sc">score ${c.score}${low}</span>${fsLine}
+          <span class="sc">score ${c.score}${low}</span>
         </div>`;
       }).join("");
       return `<div class="compare-panel">
@@ -1685,11 +1604,11 @@
       const row = list.querySelector(`.cand-row[data-cand="${candIdx}"]`);
       if (row) row.classList.add("sel");
     }
-    const dt = m.doc_type || "report";
+    const dt = m.doc_type || "review";
     renderPdfRange(m.company, m.period, c.page_start, c.page_end, `pdf-${panelIdx}`, dt, docOrigName(m.company, m.period, dt));
   };
 
-  async function renderPdfRange(company, period, start, end, containerId, docType = "report", docName = null) {
+  async function renderPdfRange(company, period, start, end, containerId, docType = "review", docName = null) {
     const url = `${API}/api/pdf?company=${encodeURIComponent(company)}&period=${encodeURIComponent(period)}&doc_type=${encodeURIComponent(docType)}`;
     const pdf = await window.pdfjsLib.getDocument(url).promise;
     const container = document.getElementById(containerId);
@@ -1717,8 +1636,8 @@
   // ----- Insight (A 커버리지 / B 차집합) -----
   // 분석 기간: 직전 실행 기간(localStorage)을 디폴트로, 없으면 2026Q1.
   let INSIGHT_PERIOD = localStorage.getItem("insightPeriod") || "2026Q1";
-  let INSIGHT_DOCTYPE = "report";  // 커버리지·공시갭·주제맵·비교메모 문서축(report/review_sep/review)
-  let INSIGHT_FSDIV = fsDivFor(INSIGHT_DOCTYPE);  // fs_div 는 doc_type 파생(report=all)
+  let INSIGHT_DOCTYPE = "review";  // 커버리지·공시갭·주제맵·비교메모 문서축(review/review_sep)
+  let INSIGHT_FSDIV = fsDivFor(INSIGHT_DOCTYPE);  // fs_div 는 doc_type 파생
   const DEFAULT_TOPICS = ["공정가치","대손충당금","금융상품 위험","영업권","리스","확정급여","법인세","우발부채 및 약정","특수관계자 거래","자본"];
   let TOPICS = [...DEFAULT_TOPICS];
   const LEVEL_LABEL = { dedicated: "전용", related: "통합·관련", none: "미발견" };
@@ -1733,7 +1652,7 @@
     reloadInsight();
   };
   // 문서축 변경: fs_div 는 더 이상 사용자 축이 아니라 doc_type 에서 파생.
-  //   report→all, review→연결, review_sep→별도. cov-fsdiv 는 항상 비활성/숨김(계약 위해 동기화만).
+  //   review→연결, review_sep→별도. cov-fsdiv 는 항상 비활성/숨김(계약 위해 동기화만).
   window.onInsightDoctypeChange = function() {
     INSIGHT_DOCTYPE = document.getElementById("cov-doctype").value;
     INSIGHT_FSDIV = fsDivFor(INSIGHT_DOCTYPE);
@@ -1837,7 +1756,7 @@
   };
 
   // 셀 더블클릭 → 비교 탭에서 4대 지주 전체를 해당 주제로 검색(요청2).
-  // 분석 기간에 분기보고서(report)가 인덱싱된 회사를 모두 대상으로 잡는다.
+  // 분석 기간에 검토보고서가 인덱싱된 회사를 모두 대상으로 잡는다.
   window.goCompareTopicAll = function(topic) {
     SELECTED = new Set();
     for (const c of COMPANIES) {
@@ -1980,7 +1899,7 @@
   // ----- 주석 RAG (§5.4) -----
   window.doRag = async function() {
     const q = document.getElementById("rag-q").value.trim();
-    const docType = (document.getElementById("rag-doctype")||{}).value || "report";
+    const docType = (document.getElementById("rag-doctype")||{}).value || "review";
     const fsdiv = fsDivFor(docType);  // fs_div 는 문서유형에서 파생(쿼리 계약 유지)
     if (!q) return toast("질의를 입력하세요.");
     const out = document.getElementById("rag-result");
@@ -2043,141 +1962,6 @@
 
   window.toast = toast;
   window.showTab = showTab;
-
-  // ===== 주석 XBRL 태깅 진단 탭 =====
-  let XBRL_MATRIX = [];
-  async function loadXbrlTagging() {
-    const csel = document.getElementById("xbrl-company");
-    if (csel && !csel.options.length) csel.innerHTML = COMPANIES.map(c => `<option>${c}</option>`).join("");
-    const psel = document.getElementById("xbrl-period");
-    const periods = (LIBRARY.available_periods && LIBRARY.available_periods.length)
-      ? LIBRARY.available_periods : ["2025Q2", "2025Q3", "2026Q1"];
-    if (psel) {
-      psel.innerHTML = periods.map(p => `<option value="${p}">${periodLabel(p)}</option>`).join("");
-      psel.value = periods[periods.length - 1];
-    }
-    try {
-      const res = await fetch(`${API}/api/xbrl-tagging/matrix`).then(r => r.json());
-      XBRL_MATRIX = res.rows || [];
-      renderXbrlMatrix();
-    } catch (e) {
-      document.getElementById("xbrl-matrix").innerHTML = `<tr><td class="empty-note">매트릭스 로드 실패</td></tr>`;
-    }
-  }
-
-  function xbrlHeat(v, max) { // 0~max 비율로 옅은 파랑(결정론 시각화, 의미부여 아님)
-    const r = max ? Math.min(v / max, 1) : 0;
-    const a = (0.06 + r * 0.34).toFixed(2);
-    return `background:rgba(0,70,255,${a});`;
-  }
-
-  function renderXbrlMatrix() {
-    const tbl = document.getElementById("xbrl-matrix");
-    if (!XBRL_MATRIX.length) { tbl.innerHTML = `<tr><td class="empty-note">진단 데이터가 없습니다. (개발 PC에서 build_xbrl_tagging 사전계산 필요)</td></tr>`; return; }
-    const ok = XBRL_MATRIX.filter(r => r.status === "ok");
-    const maxFacts = Math.max(1, ...ok.map(r => r.facts || 0));
-    const maxAxes = Math.max(1, ...ok.map(r => r.max_axes || 0));
-    let h = `<tr><th style="text-align:left;">회사</th><th>기간</th><th>fact 수</th><th>서술(TextBlock)</th><th>최대 차원수</th><th>세부공시 used/decl</th><th>사용률</th><th>PDF 매칭(L3)</th></tr>`;
-    let prevCo = null;
-    for (const r of XBRL_MATRIX) {
-      const co = (r.company !== prevCo) ? `<strong>${r.company}</strong>` : "";
-      prevCo = r.company;
-      if (r.status !== "ok") {
-        h += `<tr><td style="text-align:left;">${co}</td><td>${periodLabel(r.period)}</td><td colspan="6" style="color:#9ca3af;">${r.status === "not_built" ? "미생성" : "XBRL 미수집"}</td></tr>`;
-        continue;
-      }
-      const ratioPct = (r.used_ratio * 100).toFixed(1);
-      const l3Pct = (r.l3_rate * 100).toFixed(0);
-      h += `<tr style="cursor:pointer;" onclick="pickXbrlCell('${r.company}','${r.period}')" title="클릭 시 상세">
-        <td style="text-align:left;">${co}</td>
-        <td>${periodLabel(r.period)}</td>
-        <td style="${xbrlHeat(r.facts, maxFacts)}font-variant-numeric:tabular-nums;">${(r.facts || 0).toLocaleString()}</td>
-        <td style="${r.textblock > 0 ? 'background:#dcfce7;color:#166534;font-weight:600;' : 'color:#9ca3af;'}">${r.textblock || 0}</td>
-        <td style="${xbrlHeat(r.max_axes || 0, maxAxes)}font-variant-numeric:tabular-nums;" title="한 주석 표가 쓰는 분해축 최대 개수 — 상세태깅 정교함">${r.max_axes != null ? r.max_axes : "—"}</td>
-        <td style="font-variant-numeric:tabular-nums;">${r.notes_used}/${r.notes_declared}</td>
-        <td style="${xbrlHeat(r.used_ratio, 1)}">${ratioPct}%</td>
-        <td style="${xbrlHeat(r.l3_rate, 1)}">${r.l3_matched}/${r.l3_total} (${l3Pct}%)</td>
-      </tr>`;
-    }
-    tbl.innerHTML = h;
-  }
-
-  function pickXbrlCell(company, period) {
-    document.getElementById("xbrl-company").value = company;
-    document.getElementById("xbrl-period").value = period;
-    loadXbrlCell();
-  }
-
-  async function loadXbrlCell() {
-    const company = document.getElementById("xbrl-company").value;
-    const period = document.getElementById("xbrl-period").value;
-    const box = document.getElementById("xbrl-cell");
-    box.innerHTML = `<p style="color:#6b7280;font-size:13px;margin-top:10px;">불러오는 중…</p>`;
-    try {
-      const d = await fetch(`${API}/api/xbrl-tagging?company=${encodeURIComponent(company)}&period=${encodeURIComponent(period)}`).then(r => r.json());
-      renderXbrlCell(company, period, d);
-    } catch (e) {
-      box.innerHTML = `<p style="color:#b91c1c;font-size:13px;">진단 로드 실패</p>`;
-    }
-  }
-
-  function xbrlChips(items, color, label, fmt) {
-    if (!items || !items.length) return "";
-    return `<div style="margin-top:8px;"><div style="font-size:12px;font-weight:700;color:${color};margin-bottom:4px;">${label} (${items.length})</div>
-      <div style="display:flex;flex-wrap:wrap;gap:5px;">${items.map(fmt).join("")}</div></div>`;
-  }
-
-  function renderXbrlCell(company, period, d) {
-    const box = document.getElementById("xbrl-cell");
-    if (!d || d.status === "not_built") {
-      box.innerHTML = `<p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:13px;margin-top:10px;">이 셀의 진단이 아직 생성되지 않았습니다. 개발 PC에서 <code>python scripts/build_xbrl_tagging.py build ${company} ${period}</code> 실행 후 새로고침하세요.</p>`;
-      return;
-    }
-    if (d.status === "missing_xbrl") {
-      box.innerHTML = `<p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:13px;margin-top:10px;">이 보고서는 XBRL이 수집되지 않았습니다(DART 미제공 또는 미수집). 태깅 진단 불가.</p>`;
-      return;
-    }
-    const l1 = d.l1, l2 = d.l2, l3 = d.l3, t = l2.totals;
-    const card = (label, val, sub) => `<div style="flex:1;min-width:130px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:11px 13px;">
-      <div style="font-size:11px;color:#6b7280;font-weight:600;">${label}</div>
-      <div style="font-size:20px;font-weight:800;color:#111827;margin-top:2px;font-variant-numeric:tabular-nums;">${val}</div>
-      ${sub ? `<div style="font-size:11px;color:#6b7280;margin-top:1px;">${sub}</div>` : ""}</div>`;
-
-    const factSub = (t.attributed != null)
-      ? `주석 귀속 ${t.attributed.toLocaleString()} · 본문 ${t.unattributed.toLocaleString()}`
-      : `컨텍스트 ${t.contexts.toLocaleString()}`;
-    let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
-      ${card("주석 롤 사용/선언", `${l1.notes_used}/${l1.notes_declared}`, `세부공시 사용률 ${(l1.used_ratio*100).toFixed(1)}%`)}
-      ${card("fact 수(숫자)", t.numeric.toLocaleString(), factSub)}
-      ${card("최대 차원수", (t.max_axes != null ? t.max_axes : "—"), t.max_axes != null ? "한 표의 분해축 최대(정교함)" : "")}
-      ${card("서술 태깅(TextBlock)", t.textblock, t.textblock > 0 ? "서술형 주석 일부 XBRL 태깅" : "서술형 미태깅(표만 태깅)")}
-      ${card("PDF 주석 매칭(L3)", `${l3.overall.matched}/${l3.overall.total}`, `연결 ${(l3.by_div.연결.rate*100).toFixed(0)}% · 별도 ${(l3.by_div.별도.rate*100).toFixed(0)}%`)}
-    </div>`;
-    if (l2.dimension_aware) h += `<p style="font-size:11px;color:#6b7280;margin-top:6px;">✓ 차원 인지(dimension-aware): 각 fact 를 하이퍼큐브 차원 좌표로 단일 주석 롤에 귀속(중복 제거). 롤별 fact 합 = 주석 귀속분.</p>`;
-
-    // L3 — PDF엔 있으나 XBRL 미태깅(핵심 인사이트)
-    h += xbrlChips(l3.pdf_only, "#b45309", "PDF 주석 중 XBRL 미태깅(주로 서술형)",
-      n => `<span style="background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:999px;padding:2px 9px;font-size:12px;">${n.fs_div}·${n.pdf_no}. ${n.pdf_title}</span>`);
-    // L3 — XBRL 태깅됐으나 PDF 인덱스 미대응(병합주석/누락)
-    h += xbrlChips(l3.xbrl_only, "#6b21a8", "XBRL 태깅 주석 중 PDF 미대응(병합·번호불일치)",
-      n => `<span style="background:#faf5ff;border:1px solid #e9d5ff;color:#6b21a8;border-radius:999px;padding:2px 9px;font-size:12px;">${n.fs_div}·${n.xbrl_note_no}. ${n.xbrl_title}</span>`);
-
-    // L2 — 충실도 상위 주석 롤(fact 깊이)
-    const top = [...l2.per_note_role].sort((a, b) => (b.numeric_facts + b.textblock_facts) - (a.numeric_facts + a.textblock_facts)).slice(0, 12);
-    if (top.length) {
-      h += `<h4 style="font-size:13px;font-weight:700;margin-top:16px;">롤별 태깅 충실도 (상위 12)</h4>
-        <div class="matrix-wrap" style="margin-top:6px;"><table class="cov-table"><tr><th style="text-align:left;">주석 롤</th><th>연결/별도</th><th>숫자 fact</th><th>서술</th><th>차원(축)수</th><th>세부공시</th></tr>
-        ${top.map(r => `<tr><td style="text-align:left;">${r.note_no ? r.note_no + ". " : ""}${r.title}</td><td>${r.fs_kind}</td>
-          <td style="font-variant-numeric:tabular-nums;">${r.numeric_facts.toLocaleString()}</td>
-          <td>${r.textblock_facts || "—"}</td><td style="font-variant-numeric:tabular-nums;">${r.axes_count != null ? r.axes_count : "—"}</td><td>${r.subroles_covered}/${r.subroles_total}</td></tr>`).join("")}
-        </table></div>`;
-    }
-    box.innerHTML = h;
-  }
-
-  window.loadXbrlTagging = loadXbrlTagging;
-  window.loadXbrlCell = loadXbrlCell;
-  window.pickXbrlCell = pickXbrlCell;
 
   // ===== 재무제표 비교 탭 (fs_compare 결정론 엔진 연동) =====
   const FS_COMPANIES = ["신한", "KB", "하나", "우리"];
@@ -2243,7 +2027,7 @@
     if(v==="delta") html=comp+fsd;
     else if(v==="cons"||v==="adj") html=comp+per;
     else if(v==="bench") html=per+fsd+acc;
-    else if(v==="ratio"||v==="flags"||v==="refs") html=comp+per+fsd;
+    else if(v==="ratio"||v==="flags") html=comp+per+fsd;
     else if(v==="ts") html=comp+fsd+acc;  // 시계열: 전 기간 자동
     document.getElementById("fs-controls").innerHTML=html;
   }
@@ -2261,7 +2045,6 @@
     if(v==="ts") return fsViewTs();
     if(v==="flags") return fsViewFlags();
     if(v==="adj") return fsViewAdj();
-    if(v==="refs") return fsViewRefs();
   }
   async function fsViewDelta(){
     const out=document.getElementById("fs-result");
@@ -2364,24 +2147,6 @@
       if(r.diff!=null) h+=`<td style="text-align:right;padding:8px 10px;">${fsCell(r.diff)}${fsProvBtn(r.provenance)}</td><td style="text-align:right;padding:8px 10px;font-weight:600;">${r.pct_of_cfs}${typeof r.pct_of_cfs==='number'?'%':''}</td>`;
       else h+=`<td colspan="2" style="text-align:center;"><span class="pc-badge">계산 불가</span></td>`;
       h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
-  // ⑧ 주석 정합참조 (계정 ↔ 주석 임베딩 후보)
-  async function fsViewRefs(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>주석 매칭 중…</p>";
-    const _qs=new URLSearchParams({company:fsSel.company,period:fsSel.period,fs_div:fsSel.fsdiv}).toString();
-    const d=await fetch(`/api/notes/account-refs?${_qs}`).then(r=>r.json());
-    let h=`<div class="info-banner">재무제표 핵심계정 ↔ 관련 주석 후보(임베딩 유사도). 숫자 자동일치 아님 — <strong>후보 제시·확정은 담당자</strong>. 칩 클릭 시 원본 PDF.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">계정</th><th style="text-align:left;">관련 주석 후보 (유사도)</th></tr>`;
-    (d.rows||[]).forEach(r=>{
-      const fsOrig=docOrigName(fsSel.company, fsSel.period, "report") || DOC_FULL.report;
-      const chips=(r.matches||[]).map(m=>{
-        const url=`/api/pdf?company=${encodeURIComponent(fsSel.company)}&period=${encodeURIComponent(fsSel.period)}&doc_type=report#page=${m.page_start}`;
-        return `<span class="chip" style="cursor:pointer;" title="${(fsOrig+' · p'+m.page_start).replace(/"/g,'')}" onclick="window.open('${url}','_blank','width=1000,height=1200,scrollbars=yes,resizable=yes')">주석${m.note_no} ${m.title} · ${(m.score*100).toFixed(0)}%</span>`;
-      }).join(" ");
-      h+=`<tr><td style="text-align:left;padding:8px 10px;"><strong>${r.account_nm}</strong></td><td style="text-align:left;padding:8px 10px;">${chips||'<span class="empty-note">후보 없음</span>'}</td></tr>`;
     });
     h+=`</table></div>`; out.innerHTML=h;
   }
