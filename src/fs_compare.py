@@ -36,10 +36,27 @@ CMP_COL = {
 }
 
 
+# 기간 정렬키 — 연도 + 분기순(Q1<Q2<Q3<FY). app.py 의 _PERIOD_ORDER 와 값 일관.
+# (fs_compare 는 app 을 import 하지 않는다 — 역의존 금지. 9줄 복제가 결합도상 더 깔끔.)
+_PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "FY": 4}
+
+
+def _period_key(period: str):
+    try:
+        return (int(period[:4]), _PERIOD_ORDER.get(period[4:], 9))
+    except (ValueError, IndexError):
+        return (9999, 9)
+
+
 def cmp_col(sj_div: str, period: str):
     """sj_div 별 비교 컬럼 선택. 재무상태표(BS)=전기말(frmtrm),
-    손익/현금흐름=전기동기(frmtrm_q). (period 인자는 호출부 시그니처 유지용.)
+    손익/현금흐름=전기동기(frmtrm_q).
+
+    FY(연간확정)는 손익/현금흐름도 전기동기(분기누적)가 아니라 전기 연간(frmtrm)과
+    비교한다 — 분기 누적 컬럼(frmtrm_q)은 연간 셀에서 의미가 없기 때문.
     """
+    if str(period).endswith("FY") and sj_div in ("CIS", "IS", "CF"):
+        return ("frmtrm", "전기")
     return CMP_COL.get(sj_div, ("frmtrm", "전기"))
 
 
@@ -88,7 +105,9 @@ def list_periods(company: str) -> List[str]:
         return []
     out = [p.name for p in base.iterdir()
            if p.is_dir() and (p / "fs_structured.json").exists()]
-    return sorted(out)  # "2025Q2" < "2025Q3" < "2026Q1" 사전식=시간순
+    # 시간순 정렬: "2025Q2 < 2025Q3 < 2025FY < 2026Q1". 사전식은 FY(F<Q)가 분기 앞으로
+    # 와서 시간순이 깨지므로 _period_key 사용.
+    return sorted(out, key=_period_key)
 
 
 def list_accounts(company: str, period: str, fs_div: str = "연결") -> List[dict]:
@@ -256,13 +275,18 @@ TIMESERIES_ACCOUNTS = [
 ]
 
 
-def timeseries(company: str, account_id: str, fs_div: str = "연결") -> Dict[str, Any]:
+def timeseries(company: str, account_id: str, fs_div: str = "연결",
+               period_kind: str = "quarter") -> Dict[str, Any]:
     """여러 기간 셀에 걸친 당기(thstrm) 원문 추이 + 인접 기간 Δ/%(결정론).
 
     안전경계: 각 기간의 당기 원문만 나열·인접 비교. 단위 환산·추론 없음.
+
+    period_kind: 분기(누적)와 연간(FY, 12개월)을 한 줄 인접 Δ로 섞으면 의미가 붕괴하므로
+    동일 종류끼리만 추이를 낸다. "quarter"=Q셀만(기본·기존동작), "annual"=FY셀만(다년 추이).
     """
     fs_key = FSDIV_TO_KEY.get(fs_div, "CFS")
-    periods = list_periods(company)
+    want_fy = (period_kind == "annual")
+    periods = [p for p in list_periods(company) if p.endswith("FY") == want_fy]
     points = []
     acc_nm = account_id
     for p in periods:
@@ -290,7 +314,7 @@ def timeseries(company: str, account_id: str, fs_div: str = "연결") -> Dict[st
             )
         rows.append(row)
     return {"company": company, "account_id": account_id, "account_nm": acc_nm,
-            "fs_div": fs_div, "rows": rows}
+            "fs_div": fs_div, "period_kind": period_kind, "rows": rows}
 
 
 # 이상치 임계(전기 대비 |증감률|). 결정론 — 단순 룰, 판단 아님.

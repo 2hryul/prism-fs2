@@ -69,7 +69,9 @@ TOPIC_DICT_PATH = STORAGE_ROOT / "topic_dict.json"
 LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
 
 VALID_COMPANIES = {"신한", "KB", "하나", "우리"}
-PERIOD_PATTERN = re.compile(r"^\d{4}Q[1-3]$")
+# 분기(Q1~Q3, 검토=잠정) + 연간확정(FY, 사업보고서 기준 fnlttSinglAcntAll).
+# FY 셀은 재무데이터만 보유(PDF/주석/XBRL 없음).
+PERIOD_PATTERN = re.compile(r"^\d{4}(Q[1-3]|FY)$")
 
 # 매칭 임계값 (env 오버라이드 가능) — 순수 규칙, AI 미사용.
 # 단일 점수만으로는 오답/정답 구분 불가(리스→사채 0.7 vs 공정가치 0.735)하여
@@ -116,8 +118,8 @@ COLLECT_STATUS: Dict[str, Dict[str, Any]] = {}
 # 영문 Word 매핑 작업 상태 (key: job_id)
 WORDMAP_STATUS: Dict[str, Dict[str, Any]] = {}
 
-# 라이브러리 period 접미 → DART reprt_code (Q4·연간(FY)은 미지원).
-_SUFFIX_TO_REPRT = {"Q1": "11013", "Q2": "11012", "Q3": "11014"}
+# 라이브러리 period 접미 → DART reprt_code. FY=사업보고서(11011, 재무데이터만 수집).
+_SUFFIX_TO_REPRT = {"Q1": "11013", "Q2": "11012", "Q3": "11014", "FY": "11011"}
 
 # 임베딩 백엔드 자동 감지 (LLM API 없이도 동작)
 # frozen 번들이면 동봉 모델 폴더 우선(오프라인). 그 외엔 HF 식별자(개발).
@@ -255,12 +257,12 @@ async def _value_error_handler(request, exc: ValueError):
 # ----------------------------------------------------------------------------
 def validate_period(period: str) -> str:
     if not PERIOD_PATTERN.match(period):
-        raise HTTPException(400, f"기간 형식 오류: {period} (예: 2025Q3)")
+        raise HTTPException(400, f"기간 형식 오류: {period} (예: 2025Q3, 2025FY)")
     return period
 
 
-# 기간 정렬키 — 연도 + 분기순(Q1<Q2<Q3).
-_PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3}
+# 기간 정렬키 — 연도 + 분기순(Q1<Q2<Q3<FY). FY(연간확정)는 같은 해 분기들 뒤(연말).
+_PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "FY": 4}
 
 
 def period_sort_key(period: str):
@@ -538,6 +540,8 @@ def safe_original_filename(name: Optional[str]) -> Optional[str]:
 #   "[KB금융]반기연결검토보고서(2025.08.14).pdf". 자동 적용은 안 하고 제안만.
 # 괄호 안 날짜는 '접수월' → 보고서유형 키워드를 1차, 월을 분기 보조판정에만 사용.
 _DETECT_DATE_RE = re.compile(r"\((\d{4})(?:[.\-/](\d{1,2}))?(?:[.\-/]\d{1,2})?\)")
+# 결산기준일 "YYYY년 M월 DD일" — 본문 내용에서 분기/연간을 가장 신뢰성 있게 식별.
+_STMT_DATE_RE = re.compile(r"(\d{4})\s*년\s*(3|6|9|12)\s*월\s*(?:30|31)\s*일")
 
 
 def detect_company_from_text(text: str) -> Optional[str]:
@@ -569,25 +573,38 @@ def detect_doc_type_from_text(text: str) -> Optional[str]:
 
 
 def detect_period_from_text(text: str) -> Optional[str]:
-    """텍스트에서 기간(YYYY + Q1/Q2/Q3) 추정. 없으면 None.
+    """텍스트(파일명/본문)에서 기간(YYYY + Q1/Q2/Q3/FY) 추정. 없으면 None.
 
-    유형 키워드 1차(반기→Q2, 분기→Q1/Q3), 월은 분기 보조판정.
-    분기인데 월 불명이면 보수적으로 Q3(접수 폭 넓음).
+    우선순위:
+      1) 결산기준일 "YYYY년 M월 DD일"(본문) — 3월=Q1·6월=Q2·9월=Q3·12월=FY(연간확정). 가장 신뢰.
+      2) 명시적 분기/반기 표기(1분기/반기·2분기/3분기) + 파일명 결산기 마커 월.
+      3) 분기인데 회차 불명 → 월 보조판정, 그래도 불명이면 보수적 Q3.
+    연간 감사·사업보고서(분기/반기 표기 없음)는 본문 결산일로 FY 로 식별된다.
     """
     t = text or ""
+    # 1) 결산기준일(본문) — 분기/연간을 직접 식별(파일명의 접수일과 혼동 없음)
+    sm = _STMT_DATE_RE.search(t)
+    if sm:
+        q = {"3": "Q1", "6": "Q2", "9": "Q3", "12": "FY"}[sm.group(2)]
+        return f"{sm.group(1)}{q}"
+    # 2) 분기/반기 키워드 + 결산기 마커 월
     m = _DETECT_DATE_RE.search(t)
     year = m.group(1) if m else None
     mon = int(m.group(2)) if (m and m.group(2)) else None
     suffix = None
-    if "반기" in t:                         # 반기를 분기보다 먼저(반기에 '기'가 들어가도 무관)
+    if "반기" in t or "2분기" in t or "제2분기" in t:   # 반기=2분기
         suffix = "Q2"
-    elif "분기" in t:
+    elif "1분기" in t or "제1분기" in t:
+        suffix = "Q1"
+    elif "3분기" in t or "제3분기" in t:
+        suffix = "Q3"
+    elif "분기" in t:                       # 회차 불명 → 월 보조판정
         if mon is not None and 3 <= mon <= 6:
             suffix = "Q1"
         elif mon is not None and (mon >= 10 or mon <= 2):
             suffix = "Q3"
         else:
-            suffix = "Q3"                   # 월 불명 → 보수적 기본
+            suffix = "Q3"
     if year and suffix:
         return f"{year}{suffix}"
     return None
@@ -688,8 +705,9 @@ async def detect_pdf_meta(file: UploadFile = File(...)):
         try:
             content = await file.read()
             with fitz.open(stream=content, filetype="pdf") as doc:
-                page1 = doc[0].get_text() if doc.page_count else ""
-            meta = detect_pdf_meta_from(name, page1)
+                # 결산기준일(YYYY년 M월 DD일)은 표지 다음 페이지에 있을 수 있어 앞 5p 스캔.
+                head = "".join(doc[i].get_text() for i in range(min(5, doc.page_count)))
+            meta = detect_pdf_meta_from(name, head)
         except Exception:
             pass  # 파싱 실패 → 파일명 기반 결과만 반환
     return meta
@@ -1296,22 +1314,53 @@ CHUNK_OVERLAP = 50         # 청크 간 겹침(경계 문맥 보존)
 MAX_CHUNKS_PER_NOTE = 120  # 노트당 청크 상한(인덱스 용량 통제, 40→120)
 MAX_CHUNKS_PER_PAGE = 4    # 페이지당 청크 상한 — 긴 노트가 앞 페이지에서 예산을 소진하지 않고
                            # 전 페이지 범위에 고르게 분산되도록(긴 주석 커버리지↑)
-INDEX_SCHEMA = 3           # 인덱싱 스키마 버전(3: 250자 청크·full_text·반올림 벡터. 구버전 호환 읽기)
+INDEX_SCHEMA = 4           # 인덱싱 스키마 버전(4: 문장경계 청크. 3=raw 250자 슬라이스. 구버전 호환 읽기)
 EMB_ROUND = 5              # 인덱스 저장 벡터 소수점 자릿수 — JSON 크기 ~45%↓, 코사인 오차 <1e-4
 
+# 문장 경계: 종결부호(. 。 ! ?) 뒤 공백 또는 줄바꿈. 한국어 주석은 줄바꿈도 의미 단위.
+_SENT_SPLIT_RE = re.compile(r"(?<=[.。!?])\s+|\n+")
 
-def _chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """본문 텍스트를 overlap 슬라이딩 윈도우로 분할. 공백 정규화만(가공·요약 없음)."""
+
+def _split_sentences(text: str) -> List[str]:
+    """공백 정규화 후 문장 단위로 분리(빈 조각 제외). 가공·요약 없음."""
     text = re.sub(r"[ \t]+", " ", text or "").strip()
     if not text:
         return []
-    chunks, i, n = [], 0, len(text)
-    step = max(size - overlap, 1)
-    while i < n:
-        chunks.append(text[i:i + size])
-        if i + size >= n:
-            break
-        i += step
+    return [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+
+
+def _chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    """본문을 문장 경계 기준으로 size(자) 한도까지 그리디 패킹.
+
+    문장 중간 절단을 피해 완결된 의미 단위로 임베딩·스니펫 품질을 높인다(schema 4).
+    종결부호 없는 초장문 문장(>size, 표 평문 등)만 문자 슬라이딩(overlap)으로 폴백.
+    공백 정규화 외 가공·요약 없음.
+    """
+    sents = _split_sentences(text)
+    if not sents:
+        return []
+    chunks: List[str] = []
+    cur = ""
+    for s in sents:
+        if len(s) > size:  # 단일 문장이 한도 초과 → 문자 슬라이싱 폴백
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            step = max(size - overlap, 1)
+            for i in range(0, len(s), step):
+                chunks.append(s[i:i + size])
+                if i + size >= len(s):
+                    break
+            continue
+        if not cur:
+            cur = s
+        elif len(cur) + 1 + len(s) <= size:
+            cur = f"{cur} {s}"
+        else:
+            chunks.append(cur)
+            cur = s
+    if cur:
+        chunks.append(cur)
     return chunks
 
 
@@ -1565,6 +1614,53 @@ async def embed_and_write_index(company, period, doc_type, notes, detected_unit,
     }
 
 
+BODY_MAX_CHUNKS_PER_PAGE = 6      # 본문 페이지당 청크 상한
+BODY_MAX_CHUNKS_TOTAL = 4000      # 문서당 본문 청크 총상한(인덱스 폭주 방지)
+
+
+def body_index_path(company: str, period: str, doc_type: str) -> Path:
+    """전체 본문(주석 외 포함) 검색 인덱스 경로. 주석 인덱스(index_{dt}.json)와 별도."""
+    return entry_dir(company, period) / f"index_body_{validate_doc_type(doc_type)}.json"
+
+
+async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
+                           progress_cb=None) -> dict:
+    """PDF 전체 페이지를 본문 유닛(페이지 단위)으로 청킹·임베딩 → index_body_{dt}.json.
+
+    주석 페이지 포함(전체 텍스트 검색). 재무수치(fs_structured.json)·주석 인덱스와는 별개의
+    검색 인덱스로, RAG 질의 시 병합돼 감사의견·재무제표 본표 등 비주석 본문도 검색된다.
+    유닛 구조는 주석과 동일(no/title/fs_div/embedding/chunks) → retrieve 가 동일 처리.
+    """
+    dt = validate_doc_type(doc_type)
+    units, total_chunks = [], 0
+    with fitz.open(src_pdf) as doc:
+        total_pages = doc.page_count
+        for p in range(1, total_pages + 1):
+            if total_chunks >= BODY_MAX_CHUNKS_TOTAL:
+                break
+            ctexts = [c for c in _chunk_text(doc[p - 1].get_text())
+                      if len(c.strip()) >= 20][:BODY_MAX_CHUNKS_PER_PAGE]
+            if not ctexts:
+                continue
+            embs = await make_embeddings(ctexts)
+            chunks = [{"text": c, "page": p, "embedding": _round_emb(e),
+                       "tokens": tokenize_korean(c)} for c, e in zip(ctexts, embs)]
+            total_chunks += len(chunks)
+            units.append({
+                "no": f"B{p}", "title": f"본문 p.{p}", "fs_div": default_fs_div,
+                "page_start": p, "page_end": p,
+                "embedding": _round_emb(embs[0]), "tokens": tokenize_korean(ctexts[0]),
+                "chunks": chunks, "is_body": True,
+            })
+            if progress_cb:
+                progress_cb(p / max(total_pages, 1))
+    with open(body_index_path(company, period, dt), "w", encoding="utf-8") as f:
+        json.dump({"company": company, "period": period, "doc_type": dt,
+                   "schema": INDEX_SCHEMA, "total_pages": total_pages,
+                   "default_fs_div": default_fs_div, "notes": units}, f, ensure_ascii=False)
+    return {"pages_indexed": len(units), "chunks": total_chunks}
+
+
 async def index_entry(company: str, period: str, doc_type: str = "review"):
     dt = validate_doc_type(doc_type)
     key = f"{company}/{period}/{dt}"
@@ -1608,10 +1704,20 @@ async def index_entry(company: str, period: str, doc_type: str = "review"):
         progress_cb=lambda f: INDEX_STATUS[key].update(progress=0.5 + 0.5 * f),
     )
 
+    # 전체 본문 인덱스(주석 외 영역 포함) — 재무수치와 별개의 검색 인덱스. 실패해도 주석 검색은 유지.
+    body_pages = 0
+    try:
+        INDEX_STATUS[key]["stage"] = "body_indexing"
+        body = await build_body_index(company, period, dt, src_pdf, default_fs_div)
+        body_pages = body.get("pages_indexed", 0)
+    except Exception as e:
+        print(f"[index_entry] 본문 인덱스 생성 실패(무시) {key} - {_safe_err(e)}", file=sys.stderr)
+
     INDEX_STATUS[key] = {
         "status": "done",
         "progress": 1.0,
         "notes_extracted": res["notes_count"],
+        "body_pages": body_pages,
         "detected_unit": res["detected_unit"],
     }
 
@@ -1641,7 +1747,7 @@ def _period_to_year_reprt(period: str):
     year = int(period[:4])
     reprt = _SUFFIX_TO_REPRT.get(period[4:])
     if not reprt:
-        raise HTTPException(400, f"DART 수집 미지원 기간: {period} (Q1/Q2/Q3 만 지원)")
+        raise HTTPException(400, f"DART 수집 미지원 기간: {period} (Q1/Q2/Q3/FY 만 지원)")
     return year, reprt
 
 
@@ -2181,6 +2287,17 @@ def _load_index(company: str, period: str, doc_type: str = "review") -> Optional
     return json.loads(idx_path.read_text(encoding="utf-8"))
 
 
+def _load_body_index(company: str, period: str, doc_type: str = "review") -> Optional[dict]:
+    """전체 본문 인덱스 로드(index_body_{dt}.json). 미생성 셀(재인덱싱 전)은 None."""
+    bp = body_index_path(company, period, doc_type)
+    if not bp.exists():
+        return None
+    try:
+        return json.loads(bp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _doc_indexed(entry: dict, doc_type: str = "review") -> bool:
     """카탈로그 엔트리의 문서유형별 인덱싱 플래그(review_indexed / review_sep_indexed)."""
     if doc_type == "review_sep":
@@ -2477,8 +2594,13 @@ async def fs_ratio(company: str, period: str, fs_div: str = "연결"):
 
 
 @app.get("/api/fs/timeseries")
-async def fs_timeseries(company: str, account_id: str, fs_div: str = "연결"):
-    return fs_compare.timeseries(company, account_id, fs_div)
+async def fs_timeseries(company: str, account_id: str, fs_div: str = "연결",
+                        period_kind: str = "quarter"):
+    # period_kind: 분기(누적)와 연간(FY, 12개월)을 한 줄 인접 비교로 섞으면 의미가 붕괴하므로
+    # 동일 종류끼리만 추이를 낸다. 미지원 값은 기본 quarter 로 폴백.
+    if period_kind not in ("quarter", "annual"):
+        period_kind = "quarter"
+    return fs_compare.timeseries(company, account_id, fs_div, period_kind)
 
 
 @app.get("/api/fs/timeseries-accounts")
@@ -2599,21 +2721,51 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
                           companies: Optional[str] = None,
                           period: Optional[str] = None, top_k: int = SEARCH_TOP_K,
                           note_kind: str = "전체", generate: bool = True,
+                          include_body: bool = True,
+                          cell_keys: Optional[str] = None,
                           doc_type: Literal["review", "review_sep"] = "review"):
     q = (q or "").strip()
     if not q:
         raise HTTPException(400, "질의가 비어 있습니다.")
-    want_companies = set((companies or "").split(",")) - {""} or set(VALID_COMPANIES)
+
+    def _merge_body(co, pe, dt, idx):
+        # 전체 본문 유닛 병합(있으면) → 주석 외 본문(감사의견·재무제표 본표 등)도 검색.
+        if include_body:
+            bidx = _load_body_index(co, pe, dt)
+            if bidx and bidx.get("notes"):
+                return {**idx, "notes": list(idx.get("notes", [])) + bidx["notes"]}
+        return idx
 
     # 인덱싱된 셀 수집(주석 소스). 숫자 아님 — 주석 텍스트만.
     cells = []
-    for e in load_catalog()["entries"]:
-        if e.get("company") in want_companies and _doc_indexed(e, doc_type):
-            if period and e.get("period") != period:
+    cell_dt: Dict[tuple, str] = {}  # (회사,기간) → 문서유형 (출처 PDF·텍스트 폴백 해석용)
+    if cell_keys:
+        # 라이브러리에서 선택한 정확한 문서만 검색("회사~기간~문서유형" 목록). 연결/별도 혼재 가능.
+        seen = set()
+        for tok in cell_keys.split(","):
+            parts = tok.split("~")
+            if len(parts) != 3:
                 continue
-            idx = _load_index(e["company"], e["period"], doc_type)
+            co, pe, dt = (p.strip() for p in parts)
+            if dt not in ("review", "review_sep") or (co, pe, dt) in seen:
+                continue
+            seen.add((co, pe, dt))
+            idx = _load_index(co, pe, dt)
             if idx:
-                cells.append({"company": e["company"], "period": e["period"], "index": idx})
+                cells.append({"company": co, "period": pe, "index": _merge_body(co, pe, dt, idx)})
+                cell_dt[(co, pe)] = dt
+        fs_div = "all"  # 선택 문서가 연결/별도 혼재 가능 → fs_div 필터 해제
+    else:
+        want_companies = set((companies or "").split(",")) - {""} or set(VALID_COMPANIES)
+        for e in load_catalog()["entries"]:
+            if e.get("company") in want_companies and _doc_indexed(e, doc_type):
+                if period and e.get("period") != period:
+                    continue
+                idx = _load_index(e["company"], e["period"], doc_type)
+                if idx:
+                    cells.append({"company": e["company"], "period": e["period"],
+                                  "index": _merge_body(e["company"], e["period"], doc_type, idx)})
+                    cell_dt[(e["company"], e["period"])] = doc_type
 
     try:
         q_emb = (await make_embedding(q)).tolist()
@@ -2623,11 +2775,13 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
             bm25_cls=(BM25Okapi if (USE_BM25 and _HAS_BM25) else None),
             cos_w=COS_W_DEFAULT, cos_w_policy=COS_W_POLICY)
         for s in sources:
+            # 출처별 문서유형(선택 셀 혼재 대비) — 텍스트 폴백·PDF 링크 해석용.
+            s["doc_type"] = cell_dt.get((s["company"], s["period"]), doc_type)
             # 청크 본문 우선(정밀 인용); 구 인덱스(text 없음)는 페이지 추출 폴백
             if not s.get("text"):
                 s["text"] = notes_rag.extract_note_text(
                     s["company"], s["period"], s.get("page_start"), s.get("page_end"),
-                    doc_type=doc_type)
+                    doc_type=s["doc_type"])
     except Exception as e:
         raise HTTPException(500, _safe_err(e))
 
@@ -2658,7 +2812,7 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
             start = max(0, min(hits) - 20)
             return ("…" if start > 0 else "") + t[start:start + 100]
         return t[:100]
-    src_out = [{**{k: s.get(k) for k in ("company", "period", "fs_div", "note_no",
+    src_out = [{**{k: s.get(k) for k in ("company", "period", "fs_div", "note_no", "doc_type",
                                          "title", "page_start", "page_end", "match_page", "score")},
                 "snippet": _snippet(s)} for s in sources]
     return {"query": q, "fs_div": fs_div, "sources": src_out, "terms": q_terms,

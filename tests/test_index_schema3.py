@@ -30,11 +30,11 @@ class _FakeDoc:
         return self._pages[i]
 
 
-def test_chunk_params_v3():
-    """Phase2 파라미터 확정값 — 모델 128토큰 정합(250자)·상한 완화·스키마 v3."""
+def test_chunk_params_v4():
+    """파라미터 확정값 — 250자 한도·상한 완화·스키마 v4(문장경계 청크)."""
     assert app.CHUNK_CHARS == 250
     assert app.MAX_CHUNKS_PER_NOTE == 120
-    assert app.INDEX_SCHEMA == 3
+    assert app.INDEX_SCHEMA == 4
     assert not hasattr(app, "CHUNK_SCAN_PAGE_CAP")  # 페이지 스캔 캡 제거됨
 
 
@@ -47,12 +47,37 @@ def test_note_chunks_full_range_scan():
     assert len(chunks) <= app.MAX_CHUNKS_PER_NOTE
 
 
-def test_chunk_text_size_250():
-    """청크 길이 기본 250자(+오버랩 50) — 모델 절단 회피."""
+def test_chunk_text_long_sentence_fallback():
+    """종결부호 없는 초장문(1문장) → 문자 슬라이싱 폴백. 각 청크 ≤250자, 50자 오버랩."""
     out = app._chunk_text("가" * 1000)
     assert all(len(c) <= 250 for c in out)
-    # 오버랩: 두 번째 청크는 첫 청크 끝 50자를 공유
-    assert out[1][:50] == out[0][-50:]
+    assert out[1][:50] == out[0][-50:]  # 폴백 경로 오버랩 유지
+
+
+def test_chunk_text_sentence_boundary():
+    """다문장 입력은 문장 경계로 분할 — 문장 중간 절단 0, 각 청크 ≤250자."""
+    sents = ["공정가치는 시장가격으로 측정한다.",
+             "수준3 자산은 평가기법을 사용한다.",
+             "민감도 분석은 할인율 가정에 기반한다."]
+    out = app._chunk_text(" ".join(sents))
+    assert all(len(c) <= 250 for c in out)
+    # 모든 청크는 온전한 문장(들)로 끝남 — 중간 절단 없음
+    for c in out:
+        assert c.rstrip().endswith(".")
+    # 짧은 문장들은 한 청크로 묶임(합계 ≤250)
+    assert len(out) == 1
+
+
+def test_chunk_text_packs_until_limit():
+    """문장 누적이 250자 한도를 넘기 직전 청크 확정 — 다음 문장은 새 청크."""
+    s = ("공정가치 측정과 평가 가정을 설명하는 회계 주석 본문 예시 문장으로 "
+         "약 백자 내외 길이를 갖도록 충분히 길게 작성된 테스트 문장이다.")  # ~70자
+    assert len(s) <= 250  # 단일 문장은 한도 이내(폴백 아님)
+    out = app._chunk_text(" ".join([s, s, s, s]))  # 4문장 ≈ 280자+ → 2청크 이상
+    assert len(out) >= 2
+    assert all(len(c) <= 250 for c in out)
+    for c in out:  # 문장 경계 유지(중간 절단 0)
+        assert c.rstrip().endswith(".")
 
 
 def test_round_emb():

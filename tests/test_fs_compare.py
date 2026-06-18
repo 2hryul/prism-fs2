@@ -21,6 +21,48 @@ def test_cmp_col_quarter_autoselect():
     assert fs_compare.cmp_col("BS", "2026Q1")[0] == "frmtrm"
 
 
+def test_cmp_col_fy_uses_annual_for_pnl():
+    # FY(연간확정): 손익/현금흐름은 전기동기(frmtrm_q)가 아니라 전기 연간(frmtrm) 비교.
+    assert fs_compare.cmp_col("CIS", "2025FY") == ("frmtrm", "전기")
+    assert fs_compare.cmp_col("IS", "2025FY") == ("frmtrm", "전기")
+    assert fs_compare.cmp_col("CF", "2025FY") == ("frmtrm", "전기")
+    # BS 는 분기·FY 동일하게 전기말(frmtrm)
+    assert fs_compare.cmp_col("BS", "2025FY")[0] == "frmtrm"
+    # 회귀: 분기는 종전대로 손익=frmtrm_q
+    assert fs_compare.cmp_col("CIS", "2026Q1")[0] == "frmtrm_q"
+
+
+def test_period_key_sorts_fy_after_quarters():
+    # 시간순: 2025Q2 < 2025Q3 < 2025FY < 2026Q1 (사전식이면 FY 가 분기 앞으로 와서 깨짐)
+    src = ["2026Q1", "2025FY", "2025Q2", "2025Q3"]
+    assert sorted(src, key=fs_compare._period_key) == ["2025Q2", "2025Q3", "2025FY", "2026Q1"]
+
+
+def test_delta_fy_pnl_uses_frmtrm_base(monkeypatch):
+    # FY 손익은 frmtrm_amount(전기 연간)로 차감 — frmtrm_q 가 비어 있어도 N/A 안 됨.
+    fake = [{"account_id": "ifrs-full_ProfitLoss", "account_nm": "당기순이익", "sj_div": "CIS",
+             "thstrm_amount": "300", "frmtrm_amount": "200", "frmtrm_q_amount": None}]
+    monkeypatch.setattr(fs_compare, "_accounts", lambda c, p, k: fake)
+    d = fs_compare.delta("신한", "2025FY", "연결")
+    row = d["rows"][0]
+    assert row["compare_col"] == "frmtrm"
+    assert int(row["delta"]) == 100  # 300 − 200(전기 연간)
+
+
+def test_timeseries_period_kind_filter(monkeypatch):
+    # annual=FY 셀만, quarter=Q 셀만. 분기(누적)와 연간(12개월)을 섞지 않음.
+    monkeypatch.setattr(fs_compare, "list_periods",
+                        lambda c: ["2024FY", "2025Q2", "2025Q3", "2025FY", "2026Q1"])
+    monkeypatch.setattr(fs_compare, "_accounts",
+                        lambda c, p, k: [{"account_id": "ifrs-full_Assets",
+                                          "account_nm": "자산총계", "thstrm_amount": "100"}])
+    annual = fs_compare.timeseries("신한", "ifrs-full_Assets", "연결", "annual")
+    assert [r["period"] for r in annual["rows"]] == ["2024FY", "2025FY"]
+    assert annual["period_kind"] == "annual"
+    quarter = fs_compare.timeseries("신한", "ifrs-full_Assets", "연결", "quarter")
+    assert [r["period"] for r in quarter["rows"]] == ["2025Q2", "2025Q3", "2026Q1"]
+
+
 def test_to_int_preserves_sign_and_bigint():
     assert fs_compare._to_int("816718546000000") == 816718546000000
     assert fs_compare._to_int("-46715000000") == -46715000000

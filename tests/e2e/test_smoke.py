@@ -58,10 +58,11 @@ def test_core_navigation_and_tabs(page):
     page.wait_for_selector("#matrix-table tr", timeout=15000)
     assert page.locator("#matrix-table tr").count() > 0
 
-    # 2) 재무제표 비교: 결정론 8뷰 버튼 존재 + 뷰 전환 시 결과 렌더
+    # 2) 재무제표 비교: 결정론 7뷰 버튼 존재 + 뷰 전환 시 결과 렌더
+    #    (v0.4.0 에서 ⑧주석 정합참조 제거 → ①~⑦)
     page.evaluate("showTab('fs')")
     page.wait_for_selector("#tab-fs:not(.hidden)", timeout=5000)
-    assert page.locator("button.fs-view").count() == 8  # ①~⑧
+    assert page.locator("button.fs-view").count() == 7  # ①~⑦
     for view in ("delta", "bench", "flags"):
         page.evaluate(f"showFsView('{view}')")
         page.wait_for_timeout(300)
@@ -88,9 +89,10 @@ def test_pdf_render_pipeline(page):
     result = page.evaluate(
         """async () => {
             const lib = await (await fetch('/api/library')).json();
-            const e = (lib.entries || []).find(x => x.indexed) || (lib.entries || [])[0];
-            if (!e) return { ok:false, reason:'no library entry' };
-            const url = `/api/pdf?company=${encodeURIComponent(e.company)}&period=${encodeURIComponent(e.period)}&doc_type=report`;
+            // v0.4.0: report 제거 → 연결검토보고서(review) 인덱싱 셀 사용. FY 셀은 PDF 없음(제외).
+            const e = (lib.entries || []).find(x => x.review_indexed && x.review_collected);
+            if (!e) return { ok:false, reason:'no review-indexed entry' };
+            const url = `/api/pdf?company=${encodeURIComponent(e.company)}&period=${encodeURIComponent(e.period)}&doc_type=review`;
             const pdf = await window.pdfjsLib.getDocument(url).promise;
             const pageObj = await pdf.getPage(1);
             const viewport = pageObj.getViewport({ scale: 1.0 });

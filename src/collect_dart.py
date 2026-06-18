@@ -108,16 +108,18 @@ SEED_CORP_CODES: Dict[str, str] = {
 }
 
 # reprt_code ↔ period 매핑 (DART 정기보고서 코드)
+# 11011(사업보고서/FY)은 재무데이터(fnlttSinglAcntAll)만 수집 — PDF·XBRL 미수집(FS-only).
 REPRT_TO_PERIOD_SUFFIX: Dict[str, str] = {
     "11013": "Q1",  # 1분기보고서
     "11012": "Q2",  # 반기보고서
     "11014": "Q3",  # 3분기보고서
+    "11011": "FY",  # 사업보고서(연간 확정) — FS-only
 }
 
 # report_nm 의 결산기 마커("(YYYY.MM)")로 대상 보고서를 정밀 선택.
-#   11013→03(1분기) 11012→06(반기) 11014→09(3분기).
+#   11013→03(1분기) 11012→06(반기) 11014→09(3분기) 11011→12(사업·연간).
 REPRT_TO_PERIOD_MARK: Dict[str, str] = {
-    "11013": "03", "11012": "06", "11014": "09",
+    "11013": "03", "11012": "06", "11014": "09", "11011": "12",
 }
 
 
@@ -131,6 +133,8 @@ def list_date_window(year: int, reprt_code: str):
         return f"{year}0701", f"{year}1031"
     if reprt_code == "11014":   # 3분기(9월) — 11월경
         return f"{year}1001", f"{year+1}0228"
+    if reprt_code == "11011":   # 사업보고서(12월 결산) — 익년 3월경 접수
+        return f"{year+1}0101", f"{year+1}0630"
     return f"{year}0101", f"{year+1}0630"
 
 
@@ -732,8 +736,9 @@ def build_request_plan(company: str, corp_code: str, year: int,
 
     Returns: [{"step","url","params"}] — params 안의 crtfc_key 는 호출용 placeholder.
     rcept_no 의존 호출(document)은 list.json 수집 후 채워지므로 여기선 표기만.
+    FY(사업보고서, 11011)는 FS-only — fnlttSinglAcntAll 까지만 계획에 포함(document/첨부 제외).
     """
-    return [
+    plan = [
         {
             "step": "1.corpCode",
             "url": f"{DART_BASE}/corpCode.xml",
@@ -751,12 +756,14 @@ def build_request_plan(company: str, corp_code: str, year: int,
             "params": {"crtfc_key": api_key, "corp_code": corp_code,
                        "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": "CFS"},
         },
-        {
+    ]
+    if reprt_code != "11011":  # 분기/반기만 원문 문서(document.xml) 수집
+        plan.append({
             "step": "4.document",
             "url": f"{DART_BASE}/document.xml",
             "params": {"crtfc_key": api_key, "rcept_no": "<list.json 에서 확보>"},
-        },
-    ]
+        })
+    return plan
 
 
 def _masked_params(params: dict) -> dict:
@@ -794,25 +801,30 @@ def run_dry_run(companies: List[str], year: int, reprt_code: str) -> None:
         print(f"    - {c:<3} : {code}{seed_note}")
     print("-" * 70)
 
+    is_fy = (reprt_code == "11011")  # 사업보고서(연간확정) = FS-only
     for c in companies:
         corp_code = corp_codes.get(c, "<TBD>")
         d = entry_dir(c, period)
-        print(f"\n[{c}] period={period}  corp_code={corp_code}")
+        print(f"\n[{c}] period={period}  corp_code={corp_code}"
+              + ("  [FS-only: 재무데이터만, PDF/원문 미수집]" if is_fy else ""))
         print(f"  저장 경로:")
         print(f"    {d}\\")
-        print(f"      source/             (document.xml 원문 묶음)")
+        if not is_fy:
+            print(f"      source/             (document.xml 원문 묶음)")
         print(f"      fs_structured.json  (fnlttSinglAcntAll 결과)")
         print(f"      meta.json")
-        print(f"      (review.pdf 는 표시용 — 미확보 시 수동 업로드 유지)")
+        if not is_fy:
+            print(f"      (review.pdf 는 표시용 — 미확보 시 수동 업로드 유지)")
         print(f"  호출 계획:")
         for req in build_request_plan(c, corp_code, year, reprt_code, period, api_key):
             print(f"    {req['step']:<28} GET {req['url']}")
             print(f"      params={_masked_params(req['params'])}")
-        # 6단계: 검토보고서 첨부(OpenDartReader 2단계). 키는 odr 내부 사용(여기선 미출력).
-        odr_state = "사용 가능" if _HAS_OPENDART else "미설치(스킵 — pip install \"OpenDartReader>=0.2,<0.3\")"
-        print(f"    {'5.review(첨부)':<28} attach_docs→attach_files→download review.pdf")
-        print(f"      OpenDartReader={odr_state}, 후보=연결검토보고서>검토보고서, "
-              f"저장={entry_dir(c, period)}\\review.pdf (매직넘버 %PDF- 검증)")
+        # 검토보고서 첨부(OpenDartReader 2단계)는 분기/반기만. FY 는 FS-only 라 생략.
+        if not is_fy:
+            odr_state = "사용 가능" if _HAS_OPENDART else "미설치(스킵 — pip install \"OpenDartReader>=0.2,<0.3\")"
+            print(f"    {'5.review(첨부)':<28} attach_docs→attach_files→download review.pdf")
+            print(f"      OpenDartReader={odr_state}, 후보=연결검토보고서>검토보고서, "
+                  f"저장={entry_dir(c, period)}\\review.pdf (매직넘버 %PDF- 검증)")
 
     print("\n" + "=" * 70)
     print("DRY-RUN 종료 — 키를 .env(DART_API_KEY)에 넣고 --dry-run 없이 실행하면 라이브 수집.")
@@ -873,7 +885,7 @@ def pick_target_report(list_resp: dict, reprt_code: str, year: int) -> Optional[
         return None
     # reprt_code → 보고서명 키워드
     nm_key = {"11013": "분기보고서", "11012": "반기보고서",
-              "11014": "분기보고서"}.get(reprt_code, "")
+              "11014": "분기보고서", "11011": "사업보고서"}.get(reprt_code, "")
     mark = REPRT_TO_PERIOD_MARK.get(reprt_code, "")
     period_tag = f"{year}.{mark}"  # 예: '2025.09' — report_nm '(2025.09)' 와 매칭
     items = list_resp.get("list", [])
@@ -908,6 +920,11 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     d = entry_dir(company, period)
     d.mkdir(parents=True, exist_ok=True)
 
+    # 사업보고서(FY)는 재무데이터(fnlttSinglAcntAll)만 수집한다(FS-only). 연간 확정 재무수치를
+    # 재무제표 비교·다년 시계열에 보강하는 용도이며, 본문 PDF(감사보고서)·document.xml·XBRL 은
+    # 수집 대상이 아니다(v0.4.0 슬림 구조 유지).
+    is_fy = (reprt_code == "11011")
+
     # 2) 공시검색 → 대상 보고서. list.json 은 bsns_year 미지원 → 접수일 범위(bgn_de/end_de) 사용.
     bgn_de, end_de = list_date_window(year, reprt_code)
     list_resp = _http_get(client, f"{DART_BASE}/list.json",
@@ -939,9 +956,9 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     (d / "fs_structured.json").write_text(
         json.dumps(fs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 4) 원문 문서 → source/ (표시용 PDF 는 보장 안 됨 — 받은 원문만 저장)
+    # 4) 원문 문서 → source/ (표시용 PDF 는 보장 안 됨 — 받은 원문만 저장). FY 는 FS-only 라 스킵.
     source_files: List[str] = []
-    if rcept_no:
+    if rcept_no and not is_fy:
         try:
             r = _http_get(client, f"{DART_BASE}/document.xml",
                           {"crtfc_key": api_key, "rcept_no": rcept_no})
@@ -956,7 +973,8 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     review_sep = None
     fail_reasons: dict = {}  # 선택된 문서의 수집 실패 사유(doc_type→사유) — UI 안내용
     # 사용자가 선택한 검토보고서만 첨부 수집 — 둘 다 미선택이면 attach_docs 호출 자체 생략.
-    if odr and rcept_no and (collect_review or collect_review_sep):
+    # FY(사업보고서)는 FS-only 라 검토/감사보고서 첨부를 수집하지 않는다.
+    if odr and rcept_no and not is_fy and (collect_review or collect_review_sep):
         try:
             attach_docs_rows = odr.attach_docs(rcept_no)
         except Exception as e:
@@ -1278,8 +1296,9 @@ def build_parser() -> argparse.ArgumentParser:
             "예시:\n"
             "  python collect_dart.py --companies 신한 KB 하나 우리 --year 2025 --reprt 11014 --dry-run\n"
             "  python collect_dart.py --companies 신한 --year 2025 --reprt 11014   # 라이브(키 필요)\n"
+            "  python collect_dart.py --companies 신한 KB 하나 우리 --year 2025 --reprt 11011  # 연간확정(FS-only)\n"
             "  python collect_dart.py --self-test                                  # 오프라인 검증\n\n"
-            "reprt_code: 11013=Q1 11012=Q2(반기) 11014=Q3\n"
+            "reprt_code: 11013=Q1 11012=Q2(반기) 11014=Q3 11011=FY(사업·연간확정, 재무데이터만)\n"
             "키: backend\\.env 의 DART_API_KEY (절대 인자로 넘기지 말 것)"
         ),
     )
