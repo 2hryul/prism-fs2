@@ -44,9 +44,14 @@ def run(base: str, k: int) -> dict:
     d = spec.get("defaults", {})
     rows = []
     for item in spec["queries"]:
+        fs_div = item.get("fs_div", d.get("fs_div", "연결"))
+        # doc_type 라우팅: 별도재무제표 질의는 review_sep 인덱스를 로드해야 함.
+        # 미지정 시 fs_div 로 유도(별도→review_sep, 그 외→review). 항목이 명시하면 우선.
+        doc_type = item.get("doc_type") or ("review_sep" if fs_div == "별도" else "review")
         params = {
             "q": item["q"],
-            "fs_div": item.get("fs_div", d.get("fs_div", "연결")),
+            "fs_div": fs_div,
+            "doc_type": doc_type,
             "companies": item.get("companies", d.get("companies", "")),
             "period": item.get("period", d.get("period", "")),
             "top_k": k,
