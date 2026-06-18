@@ -35,6 +35,10 @@ BASE_DIR = Path(__file__).resolve().parent
 MAX_PAGES_PER_NOTE = 3      # 노트당 추출 페이지 상한(예: page_start..+2)
 MAX_CHARS_PER_NOTE = 2000   # 노트당 텍스트 글자 상한(LLM 컨텍스트 폭주 방지)
 
+# 주석 제목 검색이 본문 페이지 유닛(note_no="B…")에 밀리지 않도록 정렬 시 본문 유닛 강등.
+# 표시 score 는 그대로 두고 정렬 키에만 차감 → provenance·UI 일관 유지.
+BODY_RANK_PENALTY = 0.15
+
 
 def _cosine(a, b) -> float:
     a, b = np.array(a), np.array(b)
@@ -140,7 +144,7 @@ def retrieve(query_emb: List[float], indexed_cells: List[Dict[str, Any]],
             ov = sum(idf[t] for t in (q_set & title_toks_list[i])) / idf_total
             c["score"] = round(float(base + title_bonus * ov), 4)
 
-    cands.sort(key=lambda c: c["score"], reverse=True)
+    cands.sort(key=lambda c: c["score"] - (BODY_RANK_PENALTY if str(c.get("note_no") or "").startswith("B") else 0.0), reverse=True)
     return cands[:top_k]
 
 

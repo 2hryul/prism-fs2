@@ -45,6 +45,23 @@ def test_title_fallback_when_no_chunk_better():
     assert got[0]["match_page"] == 10          # page_start
 
 
+def test_note_beats_body_unit_on_tie():
+    """동점 점수의 주석(no=1) vs 본문 유닛(no="B1") → 정렬 패널티로 주석 우선.
+    표시 score 는 둘 다 동일하게 유지(패널티는 정렬 키에만 적용)."""
+    q = [1.0, 0.0]
+    notes = [
+        {"no": "B1", "title": "본문 페이지", "fs_div": "연결",
+         "page_start": 1, "page_end": 1, "embedding": [1.0, 0.0]},
+        {"no": 1, "title": "주석 제목", "fs_div": "연결",
+         "page_start": 5, "page_end": 9, "embedding": [1.0, 0.0]},
+    ]
+    cells = [{"company": "신한", "period": "2025FY", "index": {"notes": notes}}]
+    got = notes_rag.retrieve(q, cells, fs_div="연결", top_k=2)
+    assert got[0]["note_no"] == 1               # 주석이 본문보다 위
+    assert got[1]["note_no"] == "B1"
+    assert got[0]["score"] == got[1]["score"]   # 표시 score 는 동점 유지(패널티는 정렬 키만)
+
+
 def test_legacy_index_without_chunks_still_works():
     """구 인덱스(chunks 부재)도 제목 임베딩만으로 동작(하위호환)."""
     q = [1.0, 0.0]
