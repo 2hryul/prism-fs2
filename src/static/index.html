@@ -267,6 +267,7 @@
       <span style="color:#6b7280; font-weight:600;">프리셋 적용 문서:</span>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review_sep" style="width:auto;"> 🏢 별도재무제표</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review" style="width:auto;"> 🔗 연결재무제표</label>
+      <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="report" style="width:auto;"> 📄 사업보고서</label>
     </div>
 
     <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
@@ -395,7 +396,7 @@
         <div class="field" style="min-width:120px;">
           <label style="font-size:12px;color:#6b7280;font-weight:600;">문서</label>
           <select id="cov-doctype" onchange="onInsightDoctypeChange()" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-            <option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option>
+            <option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option><option value="report">사업보고서</option>
           </select>
         </div>
         <div class="field" style="min-width:100px;display:none;">
@@ -528,6 +529,7 @@
         <select id="up-doctype">
           <option value="review">🔗 연결재무제표</option>
           <option value="review_sep">🏢 별도재무제표</option>
+          <option value="report">📄 사업보고서</option>
         </select>
       </div>
       <div class="field" style="grid-column:1 / -1;">
@@ -595,17 +597,18 @@
   let SELECTED = new Set();      // "회사/기간#docType#연결|별도" (문서·fs_div 1급 축, 메모리 전용·미영속)
   let INDEX_STATUS_MAP = {};     // "회사/기간/review" -> status (인덱싱 진행상태)
 
-  // 문서 카테고리(2종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
+  // 문서 카테고리(3종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
   //   review     = 연결재무제표(검토보고서·연결)
   //   review_sep = 별도재무제표(검토보고서·별도)
+  //   report     = 사업보고서(본문 — 연결·별도 중립, fs_div="all")
   const FS_DIVS = ["연결", "별도"];
   const FSDIV_ICON = { 연결: "🔗", 별도: "🏢" };
   const FSDIV_FULL = { 연결: "연결재무제표", 별도: "별도재무제표" };
-  const DOC_ICON = { review: "🔗", review_sep: "🏢" };
-  const DOC_FULL = { review: "연결재무제표", review_sep: "별도재무제표" };
-  const DOC_SHORT = { review: "연결", review_sep: "별도" };
-  // doc_type → fs_div 파생(단일 출처). review=연결, review_sep=별도.
-  const DOC_FSDIV = { review: "연결", review_sep: "별도" };
+  const DOC_ICON = { review: "🔗", review_sep: "🏢", report: "📄" };
+  const DOC_FULL = { review: "연결재무제표", review_sep: "별도재무제표", report: "사업보고서" };
+  const DOC_SHORT = { review: "연결", review_sep: "별도", report: "사업" };
+  // doc_type → fs_div 파생(단일 출처). review=연결, review_sep=별도, report=all(중립).
+  const DOC_FSDIV = { review: "연결", review_sep: "별도", report: "all" };
   function fsDivFor(d) { return DOC_FSDIV[d] || "연결"; }
 
   // SELECTED 키 헬퍼: "회사/기간#docType#fsDiv" (fsDiv 는 fsDivFor(doc) 파생값)
@@ -615,16 +618,18 @@
     const [company, period] = cp.split("/");
     return { company, period, docType: docType || "review", fsdiv: fsdiv || "연결" };
   }
-  // 문서 카테고리별 인덱싱 여부: review→review_indexed, review_sep→review_sep_indexed
+  // 문서 카테고리별 인덱싱 여부: review→review_indexed, review_sep→review_sep_indexed, report→report_indexed
   function docIndexed(entry, docType) {
     if (!entry) return false;
     if (docType === "review_sep") return !!entry.review_sep_indexed;
+    if (docType === "report") return !!entry.report_indexed;
     return !!entry.review_indexed;
   }
-  // 문서 카테고리별 주석수(전체): review→review_notes_count, review_sep→review_sep_notes_count
+  // 문서 카테고리별 주석수(전체): review→review_notes_count, review_sep→review_sep_notes_count, report→report_notes_count
   function docCount(entry, docType) {
     if (!entry) return 0;
     if (docType === "review_sep") return entry.review_sep_notes_count || 0;
+    if (docType === "report") return entry.report_notes_count || 0;
     return entry.review_notes_count || 0;
   }
   // 원본 보고서 파일명(요구③): LIBRARY.entries 의 ${docType}_filename_original (없으면 null)
@@ -765,24 +770,29 @@
       html += `<tr><th class="company-col">${c}</th>`;
       for (const p of periods) {
         const entry = LIBRARY.entries.find(e => e.company === c && e.period === p);
-        // 셀 채움 기준: 문서 2종(review/review_sep) 중 하나라도 인덱싱·진행 중,
+        // 셀 채움 기준: 문서 3종(review/review_sep/report) 중 하나라도 인덱싱·진행 중,
         // 또는 검토보고서 PDF 없이 재무데이터만 수집된 등록 상태.
-        const anyIndexed = entry && (entry.review_indexed || entry.review_sep_indexed);
-        const anyRunning = entry && ["review", "review_sep"].some(d => {
+        const anyIndexed = entry && (entry.review_indexed || entry.review_sep_indexed || entry.report_indexed);
+        const anyRunning = entry && ["review", "review_sep", "report"].some(d => {
           const s = INDEX_STATUS_MAP[`${c}/${p}/${d}`]; return s && s.status === "running";
         });
         // 수집은 됐으나 주석 미인덱싱(PDF 미확보 등) → 빈칸 대신 '등록됨'으로 표시.
         const collectedOnly = entry && !anyIndexed && !anyRunning &&
-          (entry.fs_collected || entry.review_collected || entry.review_sep_collected);
+          (entry.fs_collected || entry.review_collected || entry.review_sep_collected || entry.report_collected);
 
         let inner, cls;
         if (entry && (anyIndexed || anyRunning || collectedOnly)) {
-          // 2-문서 카테고리 pill: 🔗연결재무제표 / 🏢별도재무제표
-          const combos = [{ doc: "review" }, { doc: "review_sep" }];
+          // 3-문서 카테고리 pill: 🔗연결재무제표 / 🏢별도재무제표 / 📄사업보고서
+          const combos = [{ doc: "review" }, { doc: "review_sep" }, { doc: "report" }];
           inner = `<div class="doc-pills">` + combos.map(({ doc }) => {
             const fd = fsDivFor(doc);                     // doc → fs_div 파생
             const label = `${DOC_ICON[doc]} ${DOC_FULL[doc]}`;
             const ttl = DOC_FULL[doc];
+            // report(사업보고서)는 DART 검토보고서 수집축이 아니라 PDF 업로드로 확보.
+            const isReport = doc === "report";
+            const absentHint = isReport
+              ? `${ttl} 미업로드 — 클릭하면 PDF 업로드 화면이 열립니다`
+              : `${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다`;
             // 인덱싱 진행표시는 해당 문서 단위로.
             const st = INDEX_STATUS_MAP[`${c}/${p}/${doc}`];
             if (st && st.status === "running") {
@@ -794,7 +804,7 @@
             if (!docIndexed(entry, doc) || !cnt) {
               // 해당 문서 카테고리 미인덱싱 → 클릭 시 자료추가 모달을 이 셀·문서로 프리셋
               return `<div class="doc-pill absent review" style="cursor:pointer;"
-                        title="${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다"
+                        title="${absentHint}"
                         onclick="event.stopPropagation();onAbsentDocClick('${c}','${p}','${doc}')">
                         <span class="dp-label">${label}</span>
                         <span class="dp-count">–</span></div>`;
@@ -870,6 +880,16 @@
   // 미수집 문서 pill(–) 클릭 → 모달을 회사·기간으로 프리셋 + 해당 문서만 수집 선택(누락분 1클릭 수집 준비)
   window.onAbsentDocClick = function(company, period, docType) {
     presetAddModal(company, period);
+    // 사업보고서(report)는 DART 검토보고서 수집축이 아님 → PDF 업로드 서브탭으로 안내·프리셋.
+    if (docType === "report") {
+      showAddSub("upload");
+      const setSel = (id, v) => { const el = document.getElementById(id); if (el && [...el.options].some(o => o.value === v)) el.value = v; };
+      setSel("up-company", company); setSel("up-doctype", "report");
+      const yr = period.slice(0, 4), tp = period.slice(4);
+      setSel("up-year", yr); setSel("up-type", tp);
+      document.getElementById("add-status").innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} · 📄 사업보고서 <b>미업로드</b> — <b>[PDF 업로드]</b> 서브탭에서 사업보고서 PDF를 올리면 본문·주석이 인덱싱됩니다.</div>`;
+      return;
+    }
     document.getElementById("add-review").checked = docType === "review";
     document.getElementById("add-review-sep").checked = docType === "review_sep";
     const docLabel = `${DOC_ICON[docType]} ${DOC_FULL[docType]} 검토보고서`;
@@ -1085,6 +1105,9 @@
   function detectDocTypeJs(t) {
     t = t || "";
     if (t.includes("연결검토")) return "review";
+    // 사업/분기/반기보고서 & 검토·감사 미포함 → report(본문 보고서). 백엔드 detect_doc_type_from_text 미러.
+    if ((t.includes("사업보고서") || t.includes("분기보고서") || t.includes("반기보고서"))
+        && !t.includes("검토") && !t.includes("감사")) return "report";
     if ((t.includes("검토") || t.includes("감사")) && !t.includes("연결")) return "review_sep";
     if (t.includes("연결") && (t.includes("검토") || t.includes("감사"))) return "review";
     return null;

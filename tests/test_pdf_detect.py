@@ -34,10 +34,10 @@ def test_company_detect_none():
 
 
 # ── 문서유형 감지 ────────────────────────────────────────────────────────────
-def test_doctype_body_report_not_detected():
-    # 본문 보고서(검토/감사 미포함)는 더 이상 감지 대상이 아님 → None
-    assert app.detect_doc_type_from_text("[신한지주]분기보고서(2025.11.14).pdf") is None
-    assert app.detect_doc_type_from_text("[하나금융지주]반기보고서.pdf") is None
+def test_doctype_body_report_detected():
+    # 사업/분기/반기보고서(검토·감사 미포함) → report(사업보고서) 재도입
+    assert app.detect_doc_type_from_text("[신한지주]분기보고서(2025.11.14).pdf") == "report"
+    assert app.detect_doc_type_from_text("[하나금융지주]반기보고서.pdf") == "report"
 
 
 def test_doctype_review_consolidated():
