@@ -1826,7 +1826,8 @@ def _collect_company_blocking(company: str, year: int, reprt: str,
         return cdart.collect_company(client, api_key, company, corp_code, year, reprt,
                                      period, odr=odr,
                                      collect_review=include.get("review", True),
-                                     collect_review_sep=include.get("review_sep", True))
+                                     collect_review_sep=include.get("review_sep", True),
+                                     collect_report=include.get("report", False))
 
 
 def _doc_detail(company: str, period: str, d: dict) -> dict:
@@ -1907,6 +1908,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
 
     review_ok = bool(meta.get("review_collected"))
     review_sep_ok = bool(meta.get("review_sep_collected"))
+    report_ok = bool(meta.get("report_collected"))
     fs_ok = (entry_dir(company, period) / "fs_structured.json").exists()
 
     # (1) 수집 시점에 카탈로그 등록 — 인덱싱과 독립. 기존 행 필드는 보존(머지).
@@ -1919,19 +1921,21 @@ async def _collect_and_index(company: str, period: str, include: dict):
         "report_nm": meta.get("report_nm"),
         "review_collected": review_ok,
         "review_sep_collected": review_sep_ok,
+        "report_collected": report_ok,
         "fs_collected": fs_ok,
         "collected_at": datetime.now(timezone.utc).isoformat(),
     })
 
     COLLECT_STATUS[key] = {"status": "indexing", "stage": "indexing",
                            "review_collected": review_ok,
-                           "review_sep_collected": review_sep_ok}
+                           "review_sep_collected": review_sep_ok,
+                           "report_collected": report_ok}
 
     # (2) 디스크에 존재하는 표시용 PDF 인덱싱 — 사용자가 선택한 문서유형만.
     indexed: List[str] = []
     try:
-        for dt in ("review", "review_sep"):
-            if include.get(dt, True) and pdf_path(company, period, dt).exists():
+        for dt in ("review", "review_sep", "report"):
+            if include.get(dt, False) and pdf_path(company, period, dt).exists():
                 await index_entry(company, period, dt)
                 indexed.append(dt)
     except Exception as e:
@@ -1939,6 +1943,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
         COLLECT_STATUS[key] = {"status": "error", "error": _safe_err(e),
                                "review_collected": review_ok,
                                "review_sep_collected": review_sep_ok,
+                               "report_collected": report_ok,
                                "requested": include,
                                **_collect_details(company, period, meta)}
         return
@@ -1947,6 +1952,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
         "status": "done",
         "review_collected": review_ok,
         "review_sep_collected": review_sep_ok,
+        "report_collected": report_ok,
         "fs_collected": fs_ok,
         "indexed": indexed,
         "rcept_no": meta.get("rcept_no"),
@@ -1961,6 +1967,7 @@ class CollectPayload(BaseModel):
     period: str
     include_review: bool = True           # 연결재무제표 검토보고서
     include_review_sep: bool = True       # 별도재무제표 검토보고서
+    include_report: bool = False          # 사업보고서 본문(best-effort — DART 첨부 미제공 시 업로드 폴백)
 
 
 @app.post("/api/library/collect")
@@ -1975,7 +1982,8 @@ async def start_collect(payload: CollectPayload, background: BackgroundTasks):
         raise HTTPException(409, "이미 수집이 진행 중입니다.")
     COLLECT_STATUS[key] = {"status": "running", "stage": "queued"}
     include = {"review": payload.include_review,
-               "review_sep": payload.include_review_sep}
+               "review_sep": payload.include_review_sep,
+               "report": payload.include_report}
     background.add_task(_collect_and_index, company, period, include)
     return {"status": "running", "company": company, "period": period}
 
@@ -1986,8 +1994,8 @@ async def start_collect(payload: CollectPayload, background: BackgroundTasks):
 class CompareTarget(BaseModel):
     company: str
     period: str
-    # 미지정 시 "review"(연결재무제표 검토보고서).
-    doc_type: Optional[Literal["review", "review_sep"]] = "review"
+    # 미지정 시 "review"(연결재무제표 검토보고서). report=사업보고서(연결·별도 중립).
+    doc_type: Optional[Literal["review", "review_sep", "report"]] = "review"
     # 연결/별도 1급 차원. 동일 fs_div 끼리만 비교(연결↔연결, 별도↔별도). "all"=전체.
     fs_div: Optional[Literal["연결", "별도", "all"]] = "연결"
 

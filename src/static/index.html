@@ -494,12 +494,14 @@
         <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; padding:9px 0; font-size:13px;">
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review-sep" checked style="width:auto;"> 🏢 별도재무제표 검토보고서</label>
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review" checked style="width:auto;"> 🔗 연결재무제표 검토보고서</label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="사업보고서 본문은 DART가 첨부 PDF로 제공하지 않는 경우가 많습니다. 첨부에 있으면 수집하고, 없으면 PDF 업로드를 이용하세요."><input type="checkbox" id="add-report" style="width:auto;"> 📄 사업보고서 <span style="color:#9ca3af; font-size:11px;">(best-effort)</span></label>
         </div>
       </div>
       <button class="btn" id="add-btn" onclick="doAddCollect()" style="background:#047857;">DART 수집</button>
       <button class="preset-btn" onclick="addEmptyColumn()" title="데이터 없이 매트릭스에 빈 컬럼만 추가(셀 클릭으로 개별 수집)">빈 컬럼만 추가</button>
     </div>
     <p style="font-size:11px; color:#6b7280; margin-top:8px;">수집 후 선택한 문서만 자동 인덱싱. 매트릭스 빈 셀을 클릭하면 해당 셀을 바로 수집합니다.</p>
+    <p style="font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:7px 9px; margin-top:6px;">📄 <b>사업보고서 본문</b>은 DART에서 첨부 PDF로 제공하지 않는 경우가 많습니다(본문=HTML 공시). 첨부에 있으면 자동 수집하고, 없으면 <a href="#" onclick="showAddSub('upload');return false;" style="color:#b45309; font-weight:600;">PDF 업로드 탭</a>에서 직접 올려 주세요.</p>
     <div id="add-status" style="margin-top:8px;"></div>
   </div>
 
@@ -1233,11 +1235,12 @@
     const req = item.requested || {};                 // 구버전 상태엔 없음 → 전부 요청으로 간주
     const fails = item.fetch_failures || {};
     const isReq = dt => req[dt] !== false;
-    const docTypes = ["review_sep", "review"];
+    const docTypes = ["review_sep", "review", "report"];
     const anyFail = docTypes.some(dt => isReq(dt) && fails[dt]);
     if (anyFail) headline = headline.replace("✓", "⚠") + " — 일부 문서 실패";
     const rows = docTypes.map(dt => {
-      const label = `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
+      // 사업보고서(report)는 '검토보고서' 접미 없이 표기. review/review_sep 만 검토보고서.
+      const label = dt === "report" ? `${DOC_ICON[dt]} ${DOC_FULL[dt]}` : `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
       const d = (item.documents || []).find(x => x.doc_type === dt);
       if (!d || !d.collected) {
         if (isReq(dt) && fails[dt]) {
@@ -1300,14 +1303,15 @@
   }
 
   // ----- DART 자동 수집 (공용 코어 — 업로드 탭·라이브러리 패널 공유) -----
-  // docSel: 수집할 문서 선택 {review, review_sep} (불리언). 재무데이터는 항상 수집.
+  // docSel: 수집할 문서 선택 {review, review_sep, report} (불리언). 재무데이터는 항상 수집.
   function startCollect(company, period, docSel, statusEl) {
     statusEl.innerHTML = `<div class="info-banner">DART에서 ${company}·${periodLabel(period)} 수집 시작...</div>`;
     return fetch(`${API}/api/library/collect`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ company, period,
         include_review: !!docSel.review,
-        include_review_sep: !!docSel.review_sep }),
+        include_review_sep: !!docSel.review_sep,
+        include_report: !!docSel.report }),
     }).then(async res => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { statusEl.innerHTML = `<div class="warn-banner">${company} 수집 시작 실패: ${data.detail || "오류"}</div>`; return false; }
@@ -1331,8 +1335,9 @@
             // 구버전 상태/상세 부재 폴백 — 기존 한 줄 요약 유지
             const rev = item.review_collected ? "연결검토 ✓" : "연결검토 –";
             const revs = item.review_sep_collected ? "별도검토 ✓" : "별도검토 –";
+            const rep = item.report_collected ? " / 사업보고서 ✓" : "";
             const idx = (item.indexed || []).length ? ` · 인덱싱: ${item.indexed.join(", ")}` : "";
-            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rev} / ${revs}${idx}</div>`;
+            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rev} / ${revs}${rep}${idx}</div>`;
           }
           loadLibrary(); resolve(true);
         } else if (item.status === "error") {
@@ -1387,6 +1392,7 @@
     const docSel = {
       review: document.getElementById("add-review").checked,
       review_sep: document.getElementById("add-review-sep").checked,
+      report: document.getElementById("add-report").checked,
     };
     const statusEl = document.getElementById("add-status");
     const btn = document.getElementById("add-btn"); btn.disabled = true;
