@@ -319,7 +319,7 @@
         <option value="서술형">서술형</option>
       </select>
       <label style="display:flex; align-items:center; gap:5px; font-size:12.5px; color:#374151; white-space:nowrap; cursor:pointer;"
-        title="Ollama 가용 시 후보 순서를 LLM이 재정렬(점수 불변·실패 시 무시)">
+        title="LLM 가용 시 후보 순서를 LLM이 재정렬(점수 불변·실패 시 무시)">
         <input type="checkbox" id="cmp-rerank" style="width:auto;"> 🤖 AI 재정렬</label>
       <button class="btn" onclick="doCompare()">검색</button>
     </div>
@@ -341,7 +341,7 @@
     <p class="tab-guide" id="guide-rag" style="color:#6b7280; font-size:13px; margin:6px 0 12px;">
       <strong>문장으로 질문하면</strong> AI가 근거를 찾아 답합니다(예: "공정가치 Level 3 가정은?").
       답변은 항상 <strong>출처(회사·주석번호·페이지)</strong>를 동반하고, <strong>숫자는 생성하지 않습니다</strong>(정량 비교는 📈 재무제표 비교 탭).
-      <strong>📚 라이브러리에서 선택한 문서만</strong> 검색합니다(회사·기간·연결/별도). 로컬 Ollama 미가동 시 <strong>검색 결과(출처)만</strong> 표시.<br>
+      <strong>📚 라이브러리에서 선택한 문서만</strong> 검색합니다(회사·기간·연결/별도). 로컬 LLM 미연결 시 <strong>검색 결과(출처)만</strong> 표시.<br>
       <span style="color:#9ca3af;">키워드로 4사 주석을 표로 나란히 보려면 🔍 주석 비교조회 탭을 쓰세요.</span>
       <span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('rag')">✕</span>
     </p>
@@ -445,7 +445,7 @@
     <div class="matrix-wrap"><table class="cov-table" id="topicmap-table"><tr><td class="empty-note">"주제 매핑 실행"을 눌러 4사를 표준 주제로 정렬하세요.</td></tr></table></div>
 
     <h3 style="font-size:15px; font-weight:700; margin-top:28px;">D. AI 비교 메모 초안 <span style="font-size:11px;color:#5b21b6;background:#ede9fe;border-radius:999px;padding:2px 9px;font-weight:700;">옵트인·인용 강제</span></h3>
-    <p style="color:#6b7280; font-size:12px; margin-top:2px;">선택 주제에 대해 4사 주석의 <strong>회계정책·가정 차이</strong>를 AI가 초안으로 정리(로컬 Ollama 옵트인). 숫자 생성 없음, 문장별 출처 동반, <strong>검토 필요</strong>.</p>
+    <p style="color:#6b7280; font-size:12px; margin-top:2px;">선택 주제에 대해 4사 주석의 <strong>회계정책·가정 차이</strong>를 AI가 초안으로 정리(로컬 LLM 옵트인). 숫자 생성 없음, 문장별 출처 동반, <strong>검토 필요</strong>.</p>
     <div class="search-bar" style="margin-top:8px;">
       <select id="memo-topic" style="flex:1;"></select>
       <button class="btn" style="background:#5b21b6;" onclick="doCompareMemo()">AI 비교 초안</button>
@@ -1876,7 +1876,7 @@
     const topic = (document.getElementById("memo-topic")||{}).value;
     if (!topic) return toast("주제를 선택하세요.");
     const out = document.getElementById("memo-result");
-    out.innerHTML = `<div class="info-banner">🤖 ${topic} — 4사 주석 비교 초안 생성 중...(Ollama, 최대 2분)</div>`;
+    out.innerHTML = `<div class="info-banner">🤖 ${topic} — 4사 주석 비교 초안 생성 중...(LLM, 최대 2분)</div>`;
     const qs = new URLSearchParams({ topic, period: INSIGHT_PERIOD, fs_div: INSIGHT_FSDIV, doc_type: INSIGHT_DOCTYPE, companies: COMPANIES.join(",") });
     let d;
     try { d = await fetch(`${API}/api/notes/compare-memo?${qs}`).then(r => r.json()); }
@@ -1887,7 +1887,7 @@
         <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-bottom:6px;">🤖 AI 비교 초안 — ${topic} (검토 필요)</div>
         <div style="font-size:13px;color:#1f2937;white-space:pre-wrap;line-height:1.6;">${d.memo.replace(/</g,'&lt;')}</div></div>`;
     } else if (d.mode === "retrieval_only") {
-      h += `<div class="info-banner">ℹ️ LLM 비활성(Ollama 미가동) — 출처만 표시합니다.</div>`;
+      h += llmOffBanner();
     } else if (d.mode === "no_evidence") {
       h += `<div class="warn-banner">근거 주석을 찾지 못했습니다.</div>`;
     }
@@ -1910,6 +1910,11 @@
     t.textContent = msg;
     t.classList.add("show");
     setTimeout(() => t.classList.remove("show"), 2000);
+  }
+
+  // LLM 미연결 시 AI 답변 영역 공용 안내(검색만 동작). retrieval_only 모드에서 사용.
+  function llmOffBanner() {
+    return `<div class="info-banner">ℹ️ <b>LLM 미연결</b> — 자연어질의는 검색만(retrieval_only) 동작하고 AI 답변 생성은 생략됩니다. 검색 결과(출처)는 정상 표시됩니다. AI 답변까지 보려면 LLM을 띄워 주세요.</div>`;
   }
   // ----- 주석 RAG (§5.4) -----
   let RAG_SOURCES = [];      // 출처 목록(인라인 미리보기 인덱스 참조)
@@ -1948,7 +1953,7 @@
         <div style="font-size:11px; font-weight:700; color:#5b21b6; margin-bottom:6px;">🤖 AI 답변 (주석 기반 · 검증 필요)</div>
         <div style="font-size:13px; color:#1f2937; white-space:pre-wrap; line-height:1.6;">${(d.answer).replace(/</g,'&lt;')}</div></div>`;
     } else if (d.mode === "retrieval_only") {
-      h += `<div class="info-banner">ℹ️ LLM 비활성(Ollama 미가동) — 검색된 출처만 표시합니다.</div>`;
+      h += llmOffBanner();
     } else if (d.mode === "no_evidence") {
       h += `<div class="warn-banner">선택한 문서에서 근거를 찾지 못했습니다. (다른 검색어를 쓰거나 라이브러리에서 검색 대상 문서를 추가·변경해 보세요)</div>`;
     }
