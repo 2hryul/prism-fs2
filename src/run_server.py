@@ -24,6 +24,16 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("USE_OLLAMA", "auto")  # Ollama 가동 시 자동 사용, 없으면 비활성
 
+# 파일 로깅(콘솔+회전 로그파일 Tee) — 더블클릭(콘솔 숨김) 실행에서도 사후 진단 가능.
+# app import 전에 설치해 기동/임포트 시점 로그·트레이스백까지 파일에 남긴다.
+try:
+    from logsetup import setup_file_logging  # noqa: E402
+    _LOG_PATH = setup_file_logging()
+    if _LOG_PATH:
+        print(f"[startup] 로그 파일: {_LOG_PATH}", file=sys.stderr)
+except Exception as _e:  # 로깅 실패가 기동을 막지 않도록 방어
+    print(f"[startup] 파일 로깅 설정 실패(무시) - {type(_e).__name__}", file=sys.stderr)
+
 import uvicorn  # noqa: E402
 from app import app  # noqa: E402  — paths 가 frozen storage/static/model 경로 해석
 
