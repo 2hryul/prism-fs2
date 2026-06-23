@@ -31,6 +31,7 @@ import re
 import sys
 import json
 import shutil
+import hashlib
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import collect_dart as cdart  # DART 수집 로직 재사용(동일 storage 레이아웃)
-import fs_compare  # 재무제표 결정론 비교 엔진(증감/연결vs별도/벤치/비율 + provenance)
 import notes_rag  # 주석 RAG(§5.4, 옵트인) — 정성 텍스트 전용, 숫자 무경유·인용 강제
 import note_filters  # 주석 종류(주기/서술형) 결정론 필터
 import note_topics  # §5.2 표준 주제 매핑(임베딩 분류, AI 무경유)
@@ -66,7 +66,11 @@ LIBRARY_ROOT = paths.LIBRARY_ROOT
 CATALOG_PATH = STORAGE_ROOT / "catalog.json"
 # Step 7: 주제사전 자동초안(build_topic_dict.py 산출). 있으면 coverage 토픽 소스로 사용.
 TOPIC_DICT_PATH = STORAGE_ROOT / "topic_dict.json"
+# 회계기준서 — 4개사/기간과 무관한 독립 문서공간(임의 업로드 PDF). 전용 카탈로그·디렉터리.
+STANDARDS_ROOT = paths.STANDARDS_ROOT
+STANDARDS_CATALOG_PATH = STANDARDS_ROOT / "catalog.json"
 LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
+STANDARDS_ROOT.mkdir(parents=True, exist_ok=True)
 
 VALID_COMPANIES = {"신한", "KB", "하나", "우리"}
 # 분기(Q1~Q3, 검토=잠정) + 연간확정(FY, 사업보고서 기준 fnlttSinglAcntAll).
@@ -1667,7 +1671,7 @@ def body_index_path(company: str, period: str, doc_type: str) -> Path:
 
 
 async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
-                           progress_cb=None) -> dict:
+                           progress_cb=None, out_path: Optional[Path] = None) -> dict:
     """PDF 전체 페이지를 본문 유닛(페이지 단위)으로 청킹·임베딩 → index_body_{dt}.json.
 
     주석 페이지 포함(전체 텍스트 검색). 재무수치(fs_structured.json)·주석 인덱스와는 별개의
@@ -1697,7 +1701,7 @@ async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
             })
             if progress_cb:
                 progress_cb(p / max(total_pages, 1))
-    with open(body_index_path(company, period, dt), "w", encoding="utf-8") as f:
+    with open(out_path or body_index_path(company, period, dt), "w", encoding="utf-8") as f:
         json.dump({"company": company, "period": period, "doc_type": dt,
                    "schema": INDEX_SCHEMA, "total_pages": total_pages,
                    "default_fs_div": default_fs_div, "notes": units}, f, ensure_ascii=False)
@@ -2596,6 +2600,255 @@ async def serve_pdf(company: str, period: str, doc_type: str = "review"):
 
 
 # ----------------------------------------------------------------------------
+# 회계기준서(Accounting Standards) — 임의 업로드 PDF 독립 문서공간.
+# 4개사/기간과 무관. 업로드 → 본문 전체 인덱싱(build_body_index) → 검색(notes_rag.retrieve)
+# → 원문 출처·PDF 표시. 결정론·인용강제·검색전용(LLM 생성 없음).
+# ----------------------------------------------------------------------------
+_STD_ID_RE = re.compile(r"[^\w가-힣]+")
+
+
+def _slugify_standard(filename: str) -> str:
+    """파일명 → 안전한 슬러그(확장자 제거, 비-[\\w가-힣]→_, 길이캡 64)."""
+    base = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if base.lower().endswith(".pdf"):
+        base = base[:-4]
+    slug = _STD_ID_RE.sub("_", base).strip("_")
+    return (slug or "standard")[:64]
+
+
+def _standard_doc_id(filename: str, content: bytes) -> str:
+    """doc_id = {slug}_{sha1(content)[:8]}. 동일 PDF 멱등·동명이내용 분리·traversal 차단."""
+    return f"{_slugify_standard(filename)}_{hashlib.sha1(content).hexdigest()[:8]}"
+
+
+def standard_dir(doc_id: str) -> Path:
+    return STANDARDS_ROOT / doc_id
+
+
+def standard_pdf_path(doc_id: str) -> Path:
+    return standard_dir(doc_id) / "doc.pdf"
+
+
+def standard_index_path(doc_id: str) -> Path:
+    return standard_dir(doc_id) / "index_body.json"
+
+
+def load_standards_catalog() -> dict:
+    """회계기준서 전용 카탈로그(기존 catalog.json 과 분리). 부재/손상 시 빈 구조."""
+    if not STANDARDS_CATALOG_PATH.exists():
+        return {"updated_at": None, "docs": []}
+    try:
+        return json.loads(STANDARDS_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"updated_at": None, "docs": []}
+
+
+def save_standards_catalog(cat: dict):
+    cat["updated_at"] = datetime.now(timezone.utc).isoformat()
+    STANDARDS_CATALOG_PATH.write_text(
+        json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def upsert_standard(doc_id: str, **fields):
+    """doc_id 1행 머지 upsert(기존 필드 보존)."""
+    cat = load_standards_catalog()
+    existing = next((d for d in cat["docs"] if d.get("doc_id") == doc_id), None)
+    if existing:
+        existing.update(fields)
+    else:
+        cat["docs"].append({"doc_id": doc_id, **fields})
+    save_standards_catalog(cat)
+
+
+def remove_standard(doc_id: str):
+    cat = load_standards_catalog()
+    cat["docs"] = [d for d in cat["docs"] if d.get("doc_id") != doc_id]
+    save_standards_catalog(cat)
+
+
+def _standard_exists(doc_id: str) -> bool:
+    """doc_id 화이트리스트(카탈로그 존재) — 경로 traversal 방어용."""
+    return any(d.get("doc_id") == doc_id for d in load_standards_catalog()["docs"])
+
+
+@app.post("/api/standards/upload")
+async def standards_upload(file: UploadFile = File(...), title: str = Form("")):
+    """회계기준서 PDF 업로드(회사/기간 없음). doc_id 부여 후 카탈로그 등록(미인덱싱)."""
+    content = await file.read()
+    try:
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            pages = doc.page_count
+    except Exception:
+        raise HTTPException(400, "유효한 PDF가 아닙니다.")
+    doc_id = _standard_doc_id(file.filename or "standard.pdf", content)
+    d = standard_dir(doc_id)
+    d.mkdir(parents=True, exist_ok=True)
+    standard_pdf_path(doc_id).write_bytes(content)
+    # 원본명 사본 보존(표시·다운로드용). 작업본명(doc.pdf)과 충돌 회피.
+    orig = safe_original_filename(file.filename)
+    if orig and orig.lower() != "doc.pdf":
+        (d / orig).write_bytes(content)
+    upsert_standard(
+        doc_id,
+        title=(title.strip() or (file.filename or doc_id)),
+        filename_original=file.filename,
+        uploaded_at=datetime.now(timezone.utc).isoformat(),
+        pages=pages, size_mb=round(len(content) / (1024 * 1024), 2),
+        content_sha1=hashlib.sha1(content).hexdigest(),
+        indexed=False, chunks=0, schema=INDEX_SCHEMA,
+    )
+    return {"doc_id": doc_id, "pages": pages, "indexed": False}
+
+
+@app.get("/api/standards/list")
+async def standards_list():
+    """업로드된 회계기준서 목록 + 인덱싱 진행상태."""
+    out = []
+    for d in load_standards_catalog()["docs"]:
+        st = INDEX_STATUS.get(f"standards/{d.get('doc_id')}") or {}
+        out.append({**d, "index_status": st.get("status"),
+                    "index_progress": st.get("progress")})
+    return {"docs": out}
+
+
+async def _index_standard(doc_id: str):
+    """본문 전체 인덱싱(build_body_index 재사용, 출력=standards 전용 경로)."""
+    key = f"standards/{doc_id}"
+    INDEX_STATUS[key] = {"status": "running", "progress": 0.0}
+    src = standard_pdf_path(doc_id)
+    if not src.exists():
+        INDEX_STATUS[key] = {"status": "error", "error": "PDF 없음"}
+        return
+    try:
+        def _cb(p):
+            INDEX_STATUS[key]["progress"] = round(p, 3)
+        res = await build_body_index(doc_id, "-", "report", src, "all",
+                                     progress_cb=_cb, out_path=standard_index_path(doc_id))
+        upsert_standard(doc_id, indexed=True, chunks=res["chunks"],
+                        indexed_at=datetime.now(timezone.utc).isoformat())
+        INDEX_STATUS[key] = {"status": "done", "chunks": res["chunks"]}
+    except Exception as e:
+        INDEX_STATUS[key] = {"status": "error", "error": _safe_err(e)}
+
+
+@app.post("/api/standards/index/{doc_id}")
+async def standards_index(doc_id: str, background: BackgroundTasks):
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    if INDEX_STATUS.get(f"standards/{doc_id}", {}).get("status") == "running":
+        raise HTTPException(409, "이미 인덱싱이 진행 중입니다.")
+    background.add_task(_index_standard, doc_id)
+    return {"status": "running", "doc_id": doc_id}
+
+
+@app.get("/api/standards/index/status")
+async def standards_index_status():
+    return {k.split("/", 1)[1]: v for k, v in INDEX_STATUS.items()
+            if k.startswith("standards/")}
+
+
+@app.get("/api/standards/search")
+async def standards_search(q: str, doc_ids: Optional[str] = None,
+                           top_k: int = SEARCH_TOP_K):
+    """선택(또는 전체) 회계기준서 본문 검색. 검색전용(LLM 생성 없음)·인용강제."""
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(400, "질의가 비어 있습니다.")
+    cat = load_standards_catalog()
+    titles = {d.get("doc_id"): d.get("title") for d in cat["docs"]}
+    want = set((doc_ids or "").split(",")) - {""}
+    cells = []
+    idx_by_doc: Dict[str, dict] = {}  # 스니펫 텍스트 보강용(로드한 인덱스 재활용)
+    for d in cat["docs"]:
+        did = d.get("doc_id")
+        if (want and did not in want) or not d.get("indexed"):
+            continue
+        ip = standard_index_path(did)
+        if not ip.exists():
+            continue
+        try:
+            idx = json.loads(ip.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cells.append({"company": did, "period": "-", "index": idx})
+        idx_by_doc[did] = idx
+    if not cells:
+        return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
+    try:
+        q_emb = (await make_embedding(q)).tolist()
+        sources = notes_rag.retrieve(
+            q_emb, cells, fs_div="all", top_k=top_k, note_kind="전체",
+            query_text=q, tokenize=tokenize_korean, expand=synonyms.expand_query,
+            bm25_cls=(BM25Okapi if (USE_BM25 and _HAS_BM25) else None),
+            cos_w=COS_W_DEFAULT, cos_w_policy=COS_W_POLICY)
+    except Exception as e:
+        raise HTTPException(500, _safe_err(e))
+    if not sources:  # 인용강제 — 근거 없으면 결과 없음
+        return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
+    q_terms = [t for t in dict.fromkeys(tokenize_korean(q)) if len(t) >= 2]
+
+    def _unit_text(did, note_no, match_page):
+        # _best_unit 은 최상위가 첫 청크면 text=None(제목 임베딩과 동점) → 인덱스에서 직접 보강.
+        idx = idx_by_doc.get(did) or {}
+        for n in idx.get("notes", []):
+            if n.get("no") != note_no:
+                continue
+            chunks = n.get("chunks", [])
+            for ch in chunks:  # 매칭 페이지 청크 우선
+                if ch.get("page") == match_page and ch.get("text"):
+                    return ch["text"]
+            return chunks[0].get("text") if chunks else None
+        return None
+
+    def _snippet(text):
+        t = re.sub(r"\s+", " ", (text or "").strip())
+        if not t:
+            return None
+        hits = [t.find(term) for term in q_terms if t.find(term) >= 0]
+        if hits:
+            start = max(0, min(hits) - 20)
+            return ("…" if start > 0 else "") + t[start:start + 100]
+        return t[:100]
+    src_out = []
+    for s in sources:
+        did = s.get("company")
+        text = s.get("text") or _unit_text(did, s.get("note_no"), s.get("match_page"))
+        src_out.append({"doc_id": did, "title": titles.get(did),
+                        "note_no": s.get("note_no"), "page_start": s.get("page_start"),
+                        "page_end": s.get("page_end"), "match_page": s.get("match_page"),
+                        "score": s.get("score"), "snippet": _snippet(text)})
+    return {"query": q, "sources": src_out, "terms": q_terms, "mode": "retrieval_only"}
+
+
+@app.get("/api/standards/pdf")
+async def standards_pdf(doc_id: str):
+    """회계기준서 원본 PDF 스트리밍(inline, #page 이동 지원). doc_id 화이트리스트 검증."""
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    target = standard_pdf_path(doc_id)
+    if not target.exists():
+        raise HTTPException(404, "PDF를 찾을 수 없습니다.")
+    doc = next((d for d in load_standards_catalog()["docs"]
+                if d.get("doc_id") == doc_id), {})
+    orig = doc.get("filename_original")
+    disposition = f"inline; filename*=UTF-8''{quote(orig)}" if orig else "inline"
+    return FileResponse(target, media_type="application/pdf",
+                        headers={"Content-Disposition": disposition})
+
+
+@app.delete("/api/standards/{doc_id}")
+async def standards_delete(doc_id: str):
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    d = standard_dir(doc_id)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+    remove_standard(doc_id)
+    INDEX_STATUS.pop(f"standards/{doc_id}", None)
+    return {"deleted": True, "doc_id": doc_id}
+
+
+# ----------------------------------------------------------------------------
 # Health
 # ----------------------------------------------------------------------------
 @app.get("/api/health")
@@ -2616,59 +2869,6 @@ async def health():
         "ollama_model": OLLAMA_MODEL if _OLLAMA_AVAILABLE else None,
         "library_size": len(cat["entries"]),
     }
-
-
-# ----------------------------------------------------------------------------
-# 재무제표 비교 — fs_compare.py(결정론) 래핑. 모든 파생값에 provenance 동봉.
-# ----------------------------------------------------------------------------
-@app.get("/api/fs/accounts")
-async def fs_accounts(company: str, period: str, fs_div: str = "연결"):
-    return {"rows": fs_compare.list_accounts(company, period, fs_div)}
-
-
-@app.get("/api/fs/delta")
-async def fs_delta(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.delta(company, period, fs_div)
-
-
-@app.get("/api/fs/consolidated-vs-separate")
-async def fs_cons_vs_sep(company: str, period: str):
-    return fs_compare.consolidated_vs_separate(company, period)
-
-
-@app.get("/api/fs/benchmark")
-async def fs_benchmark(period: str, account_id: str, fs_div: str = "연결"):
-    return fs_compare.benchmark(period, account_id, fs_div)
-
-
-@app.get("/api/fs/ratio")
-async def fs_ratio(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.ratio(company, period, fs_div)
-
-
-@app.get("/api/fs/timeseries")
-async def fs_timeseries(company: str, account_id: str, fs_div: str = "연결",
-                        period_kind: str = "quarter"):
-    # period_kind: 분기(누적)와 연간(FY, 12개월)을 한 줄 인접 비교로 섞으면 의미가 붕괴하므로
-    # 동일 종류끼리만 추이를 낸다. 미지원 값은 기본 quarter 로 폴백.
-    if period_kind not in ("quarter", "annual"):
-        period_kind = "quarter"
-    return fs_compare.timeseries(company, account_id, fs_div, period_kind)
-
-
-@app.get("/api/fs/timeseries-accounts")
-async def fs_timeseries_accounts():
-    return {"accounts": [{"account_id": a, "account_nm": n} for a, n in fs_compare.TIMESERIES_ACCOUNTS]}
-
-
-@app.get("/api/fs/flags")
-async def fs_flags(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.flags(company, period, fs_div)
-
-
-@app.get("/api/fs/consolidated-subtotals")
-async def fs_cons_subtotals(company: str, period: str):
-    return fs_compare.consolidated_subtotals(company, period)
 
 
 @app.get("/api/notes/account-refs")

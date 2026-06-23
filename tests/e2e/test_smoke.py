@@ -51,22 +51,19 @@ def page():
 
 
 def test_core_navigation_and_tabs(page):
-    """라이브러리 로드 → 재무제표 8뷰 → 비교 조회 → 커버리지. 콘솔 error 0."""
+    """라이브러리 로드 → 회계기준서 → 비교 조회 → 커버리지. 콘솔 error 0."""
     page.goto(BASE_URL, wait_until="networkidle")
 
     # 1) 라이브러리: 매트릭스가 /api/library 로 채워짐
     page.wait_for_selector("#matrix-table tr", timeout=15000)
     assert page.locator("#matrix-table tr").count() > 0
 
-    # 2) 재무제표 비교: 결정론 7뷰 버튼 존재 + 뷰 전환 시 결과 렌더
-    #    (v0.4.0 에서 ⑧주석 정합참조 제거 → ①~⑦)
-    page.evaluate("showTab('fs')")
-    page.wait_for_selector("#tab-fs:not(.hidden)", timeout=5000)
-    assert page.locator("button.fs-view").count() == 7  # ①~⑦
-    for view in ("delta", "bench", "flags"):
-        page.evaluate(f"showFsView('{view}')")
-        page.wait_for_timeout(300)
-    assert page.locator("#fs-result").inner_html().strip() != ""
+    # 2) 회계기준서 탭: 업로드 폼·검색박스·목록 컨테이너 렌더
+    page.evaluate("showTab('standards')")
+    page.wait_for_selector("#tab-standards:not(.hidden)", timeout=5000)
+    page.wait_for_selector("#std-file", timeout=5000)
+    page.wait_for_selector("#std-q", timeout=5000)
+    page.wait_for_selector("#std-list", timeout=5000)
 
     # 3) 비교 조회 탭 표시
     page.evaluate("showTab('compare')")
