@@ -104,3 +104,63 @@ def test_search_routing_returns_doc_id():
     got = notes_rag.retrieve([1.0, 0.0], cells, fs_div="all", top_k=5)
     assert got and got[0]["company"] == "doc_xyz"
     assert got[0]["note_no"] == "B1"
+
+
+def _make_pdf(path, pages_lines):
+    """각 줄을 별도 줄로 갖는 PDF 생성(테스트용). pages_lines: [[line,...], ...]."""
+    doc = fitz.open()
+    for lines in pages_lines:
+        page = doc.new_page()
+        y = 72
+        for ln in lines:
+            page.insert_text((72, y), ln, fontsize=11)
+            y += 22
+    doc.save(str(path))
+    doc.close()
+
+
+def test_segment_standard_lines():
+    """문단 분할 코어 — 섹션 태깅·표숫자 오탐 차단·구획(BC) 인식.
+
+    (한글은 fitz 기본 폰트로 PDF 추출이 안 되므로 라인 코어를 직접 검증. 실제 PDF 경로는
+    extract_standard_paragraphs 가 동일 코어를 호출.)
+    """
+    pages = [
+        (1, ["목  차", "목적", "적용범위", "위험"]),
+        (2, ["목적", "1", "이 기준서의 목적은 금융상품 공시 사항을 정하는 것이다.",
+             "2", "이 기준서의 원칙은 표시와 인식 측정을 보완하는 것이다 충분히 길게.",
+             "적용범위", "3", "이 기준서는 모든 유형의 금융상품에 적용한다 충분히 길게.",
+             "900", "이것은 표 안 숫자처럼 큰 점프라 본문 앵커가 아니어야 한다.",
+             "위험", "BC1", "결론도출근거 문단으로 위험 관련 배경 설명 충분히 길게."]),
+    ]
+    paras = app._segment_standard_lines(pages)
+    by_no = {p["no"]: p for p in paras}
+    assert set(["1", "2", "3", "BC1"]).issubset(by_no.keys())
+    assert "900" not in by_no                       # 단조증가 가드로 표숫자 배제
+    assert by_no["1"]["section"] == "목적"
+    assert by_no["3"]["section"] == "적용범위"
+    assert by_no["1"]["part"] == "본문"
+    assert by_no["BC1"]["part"] == "결론도출근거"
+    assert by_no["1"]["page_start"] == 2
+
+
+def test_build_standard_index_fallback(tmp_path, monkeypatch, std_env):
+    """문단 앵커가 거의 없는 비정형 PDF → 페이지 단위 폴백(structured=False)."""
+    doc_id = "plain_doc_bbbb2222"
+    d = std_env / doc_id
+    d.mkdir(parents=True)
+    _make_pdf(d / "doc.pdf", [
+        ["회계 일반 산문 문서입니다. 문단번호가 없는 비정형 텍스트 본문." * 2],
+        ["두 번째 페이지도 비정형 산문 텍스트로만 구성되어 있습니다." * 2],
+    ])
+
+    async def fake_embs(texts):
+        import numpy as np
+        return [np.array([1.0, 0.0]) for _ in texts]
+    monkeypatch.setattr(app, "make_embeddings", fake_embs)
+
+    res = asyncio.run(app.build_standard_index(doc_id, d / "doc.pdf",
+                                               app.standard_index_path(doc_id)))
+    assert res["structured"] is False              # 폴백
+    idx = json.loads((d / "index_body.json").read_text(encoding="utf-8"))
+    assert idx["notes"] and all(n["no"].startswith("B") for n in idx["notes"])

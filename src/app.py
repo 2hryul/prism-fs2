@@ -1708,6 +1708,135 @@ async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
     return {"pages_indexed": len(units), "chunks": total_chunks}
 
 
+# ── 회계기준서 문단 파서 ──────────────────────────────────────────────────────
+# K-IFRS 기준서는 문단번호(1, 한3.1, 11A, B40, IG40E, BC72B)가 인용 단위다. 페이지 단위 대신
+# 문단 단위로 구조화 → 출처를 "문단 35H·신용위험"으로 제시(검색 정밀도·인용 품질↑).
+_STD_BC = re.compile(r"^BC(\d{1,3})[A-Z]{0,5}$")        # 결론도출근거
+_STD_IG = re.compile(r"^IG(\d{1,3})[A-Z]{0,3}$")        # 적용사례·실무적용지침
+_STD_B = re.compile(r"^B(\d{1,3})[A-Z]{0,2}$")          # 부록B 적용지침
+_STD_BODY = re.compile(r"^(한)?(\d{1,3})[A-Z]{0,3}(\.\d+)?$")  # 본문 1, 한3.1, 11A, 20D
+_STD_PAGENO = re.compile(r"^-\s*\d+\s*-$")
+_STD_TITLE = re.compile(r"^[가-힣][가-힣ㆍ·\s]+$")
+STD_MIN_PARAGRAPHS = 10   # 이 미만이면 비정형 → 페이지 단위 폴백
+
+
+def _std_anchor(s: str):
+    """줄이 문단번호 앵커면 (구획, 번호, 본문base) 반환. 아니면 None."""
+    if _STD_BC.match(s):
+        return ("결론도출근거", s, None)
+    if _STD_IG.match(s):
+        return ("적용사례", s, None)
+    if _STD_B.match(s):
+        return ("부록B", s, None)
+    m = _STD_BODY.match(s)
+    if m:
+        return ("본문", s, int(m.group(2)))
+    return None
+
+
+def _segment_standard_lines(pages: List) -> List[Dict[str, Any]]:
+    """문단 분할 코어(PDF I/O 분리 — 테스트 가능). pages: [(page_no_1based, [lines]), ...].
+
+    - 목차(목  차/목차) 페이지(앞 15개 한정)에서 섹션 제목 화이트리스트 추출 → 본문 섹션 태깅.
+    - 본문 앵커 단조증가 가드(base ≤ 직전+3, 1~60)로 표 안 숫자 오탐 차단.
+    - 부록B/적용사례(IG)/결론도출근거(BC)는 접두 패턴으로 구획 태깅.
+    - 목차 마지막 페이지 다음부터 본문 수집(표지·저작권·목차 자동 제외).
+    """
+    toc_titles, last_toc = set(), -1
+    for i, (pno, lines) in enumerate(pages[:15]):
+        joined = "\n".join(lines)
+        if "목  차" in joined or "목차" in joined:
+            last_toc = i
+            for ln in lines:
+                s = ln.strip()
+                if 2 <= len(s) <= 30 and _STD_TITLE.fullmatch(s):
+                    toc_titles.add(s)
+    body = pages[last_toc + 1:] if last_toc >= 0 else pages
+
+    units: List[Dict[str, Any]] = []
+    cur = None
+    cur_sec = ""
+    last_base = 0
+
+    def _flush():
+        if cur is not None:
+            cur["text"] = " ".join(x.strip() for x in cur["_buf"] if x.strip())
+            cur.pop("_buf", None)
+            units.append(cur)
+
+    for pno, lines in body:
+        for ln in lines:
+            s = ln.strip()
+            if not s or _STD_PAGENO.match(s):
+                continue
+            a = _std_anchor(s)
+            ok = False
+            if a:
+                part, no, base = a
+                if part == "본문":
+                    if base is not None and 1 <= base <= 60 and base <= last_base + 3:
+                        ok = True
+                        last_base = max(last_base, base)
+                else:
+                    ok = True
+            if ok:
+                _flush()
+                cur = {"no": a[1], "part": a[0], "section": cur_sec,
+                       "page_start": pno, "page_end": pno, "_buf": []}
+                continue
+            if s in toc_titles:               # 섹션 헤더(정확일치)
+                cur_sec = s
+            elif cur is not None:
+                cur["_buf"].append(s)
+                cur["page_end"] = pno
+    _flush()
+    # 빈/짧은(표 숫자·헤더 잔재) 유닛 드롭
+    return [u for u in units if len(u.get("text", "")) >= 20]
+
+
+def extract_standard_paragraphs(pdf_path: Path) -> List[Dict[str, Any]]:
+    """K-IFRS 기준서 PDF → 문단 단위 [{no, part, section, page_start, page_end, text}]."""
+    with fitz.open(pdf_path) as doc:
+        pages = [(pi + 1, doc[pi].get_text().split("\n")) for pi in range(doc.page_count)]
+    return _segment_standard_lines(pages)
+
+
+async def build_standard_index(doc_id: str, src_pdf: Path, out_path: Path) -> dict:
+    """회계기준서 인덱싱 — 문단 파서 우선, 비정형(문단<임계) PDF 는 페이지 단위 폴백.
+
+    문단 단위 유닛(no=문단번호, title=섹션)을 build_body_index 와 동일 스키마로 저장 →
+    retrieve·검색·PDF 뷰어가 변경 없이 처리. fs_div="all"(중립).
+    """
+    paras = extract_standard_paragraphs(src_pdf)
+    if len(paras) < STD_MIN_PARAGRAPHS:   # 비정형 → 현행 페이지 단위 인덱싱 폴백
+        res = await build_body_index(doc_id, "-", "report", src_pdf, "all", out_path=out_path)
+        res["structured"] = False
+        return res
+    units, total = [], 0
+    for p in paras:
+        if total >= BODY_MAX_CHUNKS_TOTAL:
+            break
+        ctexts = [c for c in _chunk_text(p["text"]) if len(c.strip()) >= 20][:BODY_MAX_CHUNKS_PER_PAGE]
+        if not ctexts:
+            continue
+        embs = await make_embeddings(ctexts)
+        pg = p["page_start"]
+        chunks = [{"text": c, "page": pg, "embedding": _round_emb(e),
+                   "tokens": tokenize_korean(c)} for c, e in zip(ctexts, embs)]
+        total += len(chunks)
+        units.append({
+            "no": p["no"], "title": p.get("section") or p["part"], "part": p["part"],
+            "fs_div": "all", "page_start": pg, "page_end": p.get("page_end", pg),
+            "embedding": _round_emb(embs[0]), "tokens": tokenize_korean(ctexts[0]),
+            "chunks": chunks, "is_body": True,
+        })
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"company": doc_id, "period": "-", "doc_type": "report",
+                   "schema": INDEX_SCHEMA, "structured": True, "notes": units},
+                  f, ensure_ascii=False)
+    return {"pages_indexed": len(units), "chunks": total, "structured": True}
+
+
 async def index_entry(company: str, period: str, doc_type: str = "review"):
     dt = validate_doc_type(doc_type)
     key = f"{company}/{period}/{dt}"
@@ -2720,13 +2849,13 @@ async def _index_standard(doc_id: str):
         INDEX_STATUS[key] = {"status": "error", "error": "PDF 없음"}
         return
     try:
-        def _cb(p):
-            INDEX_STATUS[key]["progress"] = round(p, 3)
-        res = await build_body_index(doc_id, "-", "report", src, "all",
-                                     progress_cb=_cb, out_path=standard_index_path(doc_id))
+        # 기준서 문단 파서 우선(비정형 PDF 는 내부에서 페이지 단위 폴백).
+        res = await build_standard_index(doc_id, src, standard_index_path(doc_id))
         upsert_standard(doc_id, indexed=True, chunks=res["chunks"],
+                        structured=res.get("structured", False),
                         indexed_at=datetime.now(timezone.utc).isoformat())
-        INDEX_STATUS[key] = {"status": "done", "chunks": res["chunks"]}
+        INDEX_STATUS[key] = {"status": "done", "chunks": res["chunks"],
+                             "structured": res.get("structured", False)}
     except Exception as e:
         INDEX_STATUS[key] = {"status": "error", "error": _safe_err(e)}
 
@@ -2813,8 +2942,10 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
     for s in sources:
         did = s.get("company")
         text = s.get("text") or _unit_text(did, s.get("note_no"), s.get("match_page"))
+        # s["title"] = 유닛 제목(구조화 시 섹션명, 페이지폴백 시 "본문 p.N"). note_no = 문단번호/B번호.
         src_out.append({"doc_id": did, "title": titles.get(did),
-                        "note_no": s.get("note_no"), "page_start": s.get("page_start"),
+                        "note_no": s.get("note_no"), "section": s.get("title"),
+                        "page_start": s.get("page_start"),
                         "page_end": s.get("page_end"), "match_page": s.get("match_page"),
                         "score": s.get("score"), "snippet": _snippet(text)})
     return {"query": q, "sources": src_out, "terms": q_terms, "mode": "retrieval_only"}
