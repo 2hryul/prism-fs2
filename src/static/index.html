@@ -267,6 +267,7 @@
       <span style="color:#6b7280; font-weight:600;">프리셋 적용 문서:</span>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review_sep" style="width:auto;"> 🏢 별도재무제표</label>
       <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="review" style="width:auto;"> 🔗 연결재무제표</label>
+      <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" class="preset-doctype" value="report" style="width:auto;"> 📄 사업보고서</label>
     </div>
 
     <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
@@ -318,7 +319,7 @@
         <option value="서술형">서술형</option>
       </select>
       <label style="display:flex; align-items:center; gap:5px; font-size:12.5px; color:#374151; white-space:nowrap; cursor:pointer;"
-        title="Ollama 가용 시 후보 순서를 LLM이 재정렬(점수 불변·실패 시 무시)">
+        title="LLM 가용 시 후보 순서를 LLM이 재정렬(점수 불변·실패 시 무시)">
         <input type="checkbox" id="cmp-rerank" style="width:auto;"> 🤖 AI 재정렬</label>
       <button class="btn" onclick="doCompare()">검색</button>
     </div>
@@ -340,7 +341,7 @@
     <p class="tab-guide" id="guide-rag" style="color:#6b7280; font-size:13px; margin:6px 0 12px;">
       <strong>문장으로 질문하면</strong> AI가 근거를 찾아 답합니다(예: "공정가치 Level 3 가정은?").
       답변은 항상 <strong>출처(회사·주석번호·페이지)</strong>를 동반하고, <strong>숫자는 생성하지 않습니다</strong>(정량 비교는 📈 재무제표 비교 탭).
-      <strong>📚 라이브러리에서 선택한 문서만</strong> 검색합니다(회사·기간·연결/별도). 로컬 Ollama 미가동 시 <strong>검색 결과(출처)만</strong> 표시.<br>
+      <strong>📚 라이브러리에서 선택한 문서만</strong> 검색합니다(회사·기간·연결/별도). 로컬 LLM 미연결 시 <strong>검색 결과(출처)만</strong> 표시.<br>
       <span style="color:#9ca3af;">키워드로 4사 주석을 표로 나란히 보려면 🔍 주석 비교조회 탭을 쓰세요.</span>
       <span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('rag')">✕</span>
     </p>
@@ -395,7 +396,7 @@
         <div class="field" style="min-width:120px;">
           <label style="font-size:12px;color:#6b7280;font-weight:600;">문서</label>
           <select id="cov-doctype" onchange="onInsightDoctypeChange()" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-            <option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option>
+            <option value="review">연결재무제표</option><option value="review_sep">별도재무제표</option><option value="report">사업보고서</option>
           </select>
         </div>
         <div class="field" style="min-width:100px;display:none;">
@@ -444,7 +445,7 @@
     <div class="matrix-wrap"><table class="cov-table" id="topicmap-table"><tr><td class="empty-note">"주제 매핑 실행"을 눌러 4사를 표준 주제로 정렬하세요.</td></tr></table></div>
 
     <h3 style="font-size:15px; font-weight:700; margin-top:28px;">D. AI 비교 메모 초안 <span style="font-size:11px;color:#5b21b6;background:#ede9fe;border-radius:999px;padding:2px 9px;font-weight:700;">옵트인·인용 강제</span></h3>
-    <p style="color:#6b7280; font-size:12px; margin-top:2px;">선택 주제에 대해 4사 주석의 <strong>회계정책·가정 차이</strong>를 AI가 초안으로 정리(로컬 Ollama 옵트인). 숫자 생성 없음, 문장별 출처 동반, <strong>검토 필요</strong>.</p>
+    <p style="color:#6b7280; font-size:12px; margin-top:2px;">선택 주제에 대해 4사 주석의 <strong>회계정책·가정 차이</strong>를 AI가 초안으로 정리(로컬 LLM 옵트인). 숫자 생성 없음, 문장별 출처 동반, <strong>검토 필요</strong>.</p>
     <div class="search-bar" style="margin-top:8px;">
       <select id="memo-topic" style="flex:1;"></select>
       <button class="btn" style="background:#5b21b6;" onclick="doCompareMemo()">AI 비교 초안</button>
@@ -493,12 +494,14 @@
         <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; padding:9px 0; font-size:13px;">
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review-sep" checked style="width:auto;"> 🏢 별도재무제표 검토보고서</label>
           <label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="add-review" checked style="width:auto;"> 🔗 연결재무제표 검토보고서</label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="사업보고서 본문은 DART가 첨부 PDF로 제공하지 않는 경우가 많습니다. 첨부에 있으면 수집하고, 없으면 PDF 업로드를 이용하세요."><input type="checkbox" id="add-report" style="width:auto;"> 📄 사업보고서 <span style="color:#9ca3af; font-size:11px;">(best-effort)</span></label>
         </div>
       </div>
       <button class="btn" id="add-btn" onclick="doAddCollect()" style="background:#047857;">DART 수집</button>
       <button class="preset-btn" onclick="addEmptyColumn()" title="데이터 없이 매트릭스에 빈 컬럼만 추가(셀 클릭으로 개별 수집)">빈 컬럼만 추가</button>
     </div>
     <p style="font-size:11px; color:#6b7280; margin-top:8px;">수집 후 선택한 문서만 자동 인덱싱. 매트릭스 빈 셀을 클릭하면 해당 셀을 바로 수집합니다.</p>
+    <p style="font-size:11px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:6px; padding:7px 9px; margin-top:6px;">📄 <b>사업보고서 본문</b>은 DART에서 첨부 PDF로 제공하지 않는 경우가 많습니다(본문=HTML 공시). 첨부에 있으면 자동 수집하고, 없으면 <a href="#" onclick="showAddSub('upload');return false;" style="color:#b45309; font-weight:600;">PDF 업로드 탭</a>에서 직접 올려 주세요.</p>
     <div id="add-status" style="margin-top:8px;"></div>
   </div>
 
@@ -528,6 +531,7 @@
         <select id="up-doctype">
           <option value="review">🔗 연결재무제표</option>
           <option value="review_sep">🏢 별도재무제표</option>
+          <option value="report">📄 사업보고서</option>
         </select>
       </div>
       <div class="field" style="grid-column:1 / -1;">
@@ -595,17 +599,18 @@
   let SELECTED = new Set();      // "회사/기간#docType#연결|별도" (문서·fs_div 1급 축, 메모리 전용·미영속)
   let INDEX_STATUS_MAP = {};     // "회사/기간/review" -> status (인덱싱 진행상태)
 
-  // 문서 카테고리(2종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
+  // 문서 카테고리(3종)가 1급 선택 축. fs_div 는 사용자 축이 아니라 doc_type 에서 파생.
   //   review     = 연결재무제표(검토보고서·연결)
   //   review_sep = 별도재무제표(검토보고서·별도)
+  //   report     = 사업보고서(본문 — 연결·별도 중립, fs_div="all")
   const FS_DIVS = ["연결", "별도"];
   const FSDIV_ICON = { 연결: "🔗", 별도: "🏢" };
   const FSDIV_FULL = { 연결: "연결재무제표", 별도: "별도재무제표" };
-  const DOC_ICON = { review: "🔗", review_sep: "🏢" };
-  const DOC_FULL = { review: "연결재무제표", review_sep: "별도재무제표" };
-  const DOC_SHORT = { review: "연결", review_sep: "별도" };
-  // doc_type → fs_div 파생(단일 출처). review=연결, review_sep=별도.
-  const DOC_FSDIV = { review: "연결", review_sep: "별도" };
+  const DOC_ICON = { review: "🔗", review_sep: "🏢", report: "📄" };
+  const DOC_FULL = { review: "연결재무제표", review_sep: "별도재무제표", report: "사업보고서" };
+  const DOC_SHORT = { review: "연결", review_sep: "별도", report: "사업" };
+  // doc_type → fs_div 파생(단일 출처). review=연결, review_sep=별도, report=all(중립).
+  const DOC_FSDIV = { review: "연결", review_sep: "별도", report: "all" };
   function fsDivFor(d) { return DOC_FSDIV[d] || "연결"; }
 
   // SELECTED 키 헬퍼: "회사/기간#docType#fsDiv" (fsDiv 는 fsDivFor(doc) 파생값)
@@ -615,16 +620,18 @@
     const [company, period] = cp.split("/");
     return { company, period, docType: docType || "review", fsdiv: fsdiv || "연결" };
   }
-  // 문서 카테고리별 인덱싱 여부: review→review_indexed, review_sep→review_sep_indexed
+  // 문서 카테고리별 인덱싱 여부: review→review_indexed, review_sep→review_sep_indexed, report→report_indexed
   function docIndexed(entry, docType) {
     if (!entry) return false;
     if (docType === "review_sep") return !!entry.review_sep_indexed;
+    if (docType === "report") return !!entry.report_indexed;
     return !!entry.review_indexed;
   }
-  // 문서 카테고리별 주석수(전체): review→review_notes_count, review_sep→review_sep_notes_count
+  // 문서 카테고리별 주석수(전체): review→review_notes_count, review_sep→review_sep_notes_count, report→report_notes_count
   function docCount(entry, docType) {
     if (!entry) return 0;
     if (docType === "review_sep") return entry.review_sep_notes_count || 0;
+    if (docType === "report") return entry.report_notes_count || 0;
     return entry.review_notes_count || 0;
   }
   // 원본 보고서 파일명(요구③): LIBRARY.entries 의 ${docType}_filename_original (없으면 null)
@@ -765,24 +772,29 @@
       html += `<tr><th class="company-col">${c}</th>`;
       for (const p of periods) {
         const entry = LIBRARY.entries.find(e => e.company === c && e.period === p);
-        // 셀 채움 기준: 문서 2종(review/review_sep) 중 하나라도 인덱싱·진행 중,
+        // 셀 채움 기준: 문서 3종(review/review_sep/report) 중 하나라도 인덱싱·진행 중,
         // 또는 검토보고서 PDF 없이 재무데이터만 수집된 등록 상태.
-        const anyIndexed = entry && (entry.review_indexed || entry.review_sep_indexed);
-        const anyRunning = entry && ["review", "review_sep"].some(d => {
+        const anyIndexed = entry && (entry.review_indexed || entry.review_sep_indexed || entry.report_indexed);
+        const anyRunning = entry && ["review", "review_sep", "report"].some(d => {
           const s = INDEX_STATUS_MAP[`${c}/${p}/${d}`]; return s && s.status === "running";
         });
         // 수집은 됐으나 주석 미인덱싱(PDF 미확보 등) → 빈칸 대신 '등록됨'으로 표시.
         const collectedOnly = entry && !anyIndexed && !anyRunning &&
-          (entry.fs_collected || entry.review_collected || entry.review_sep_collected);
+          (entry.fs_collected || entry.review_collected || entry.review_sep_collected || entry.report_collected);
 
         let inner, cls;
         if (entry && (anyIndexed || anyRunning || collectedOnly)) {
-          // 2-문서 카테고리 pill: 🔗연결재무제표 / 🏢별도재무제표
-          const combos = [{ doc: "review" }, { doc: "review_sep" }];
+          // 3-문서 카테고리 pill: 🔗연결재무제표 / 🏢별도재무제표 / 📄사업보고서
+          const combos = [{ doc: "review" }, { doc: "review_sep" }, { doc: "report" }];
           inner = `<div class="doc-pills">` + combos.map(({ doc }) => {
             const fd = fsDivFor(doc);                     // doc → fs_div 파생
             const label = `${DOC_ICON[doc]} ${DOC_FULL[doc]}`;
             const ttl = DOC_FULL[doc];
+            // report(사업보고서)는 DART 검토보고서 수집축이 아니라 PDF 업로드로 확보.
+            const isReport = doc === "report";
+            const absentHint = isReport
+              ? `${ttl} 미업로드 — 클릭하면 PDF 업로드 화면이 열립니다`
+              : `${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다`;
             // 인덱싱 진행표시는 해당 문서 단위로.
             const st = INDEX_STATUS_MAP[`${c}/${p}/${doc}`];
             if (st && st.status === "running") {
@@ -794,7 +806,7 @@
             if (!docIndexed(entry, doc) || !cnt) {
               // 해당 문서 카테고리 미인덱싱 → 클릭 시 자료추가 모달을 이 셀·문서로 프리셋
               return `<div class="doc-pill absent review" style="cursor:pointer;"
-                        title="${ttl} 미수집 — 클릭하면 DART 수집 팝업이 열립니다"
+                        title="${absentHint}"
                         onclick="event.stopPropagation();onAbsentDocClick('${c}','${p}','${doc}')">
                         <span class="dp-label">${label}</span>
                         <span class="dp-count">–</span></div>`;
@@ -870,6 +882,16 @@
   // 미수집 문서 pill(–) 클릭 → 모달을 회사·기간으로 프리셋 + 해당 문서만 수집 선택(누락분 1클릭 수집 준비)
   window.onAbsentDocClick = function(company, period, docType) {
     presetAddModal(company, period);
+    // 사업보고서(report)는 DART 검토보고서 수집축이 아님 → PDF 업로드 서브탭으로 안내·프리셋.
+    if (docType === "report") {
+      showAddSub("upload");
+      const setSel = (id, v) => { const el = document.getElementById(id); if (el && [...el.options].some(o => o.value === v)) el.value = v; };
+      setSel("up-company", company); setSel("up-doctype", "report");
+      const yr = period.slice(0, 4), tp = period.slice(4);
+      setSel("up-year", yr); setSel("up-type", tp);
+      document.getElementById("add-status").innerHTML = `<div class="info-banner">${company}·${periodLabel(period)} · 📄 사업보고서 <b>미업로드</b> — <b>[PDF 업로드]</b> 서브탭에서 사업보고서 PDF를 올리면 본문·주석이 인덱싱됩니다.</div>`;
+      return;
+    }
     document.getElementById("add-review").checked = docType === "review";
     document.getElementById("add-review-sep").checked = docType === "review_sep";
     const docLabel = `${DOC_ICON[docType]} ${DOC_FULL[docType]} 검토보고서`;
@@ -1085,6 +1107,9 @@
   function detectDocTypeJs(t) {
     t = t || "";
     if (t.includes("연결검토")) return "review";
+    // 사업/분기/반기보고서 & 검토·감사 미포함 → report(본문 보고서). 백엔드 detect_doc_type_from_text 미러.
+    if ((t.includes("사업보고서") || t.includes("분기보고서") || t.includes("반기보고서"))
+        && !t.includes("검토") && !t.includes("감사")) return "report";
     if ((t.includes("검토") || t.includes("감사")) && !t.includes("연결")) return "review_sep";
     if (t.includes("연결") && (t.includes("검토") || t.includes("감사"))) return "review";
     return null;
@@ -1210,11 +1235,12 @@
     const req = item.requested || {};                 // 구버전 상태엔 없음 → 전부 요청으로 간주
     const fails = item.fetch_failures || {};
     const isReq = dt => req[dt] !== false;
-    const docTypes = ["review_sep", "review"];
+    const docTypes = ["review_sep", "review", "report"];
     const anyFail = docTypes.some(dt => isReq(dt) && fails[dt]);
     if (anyFail) headline = headline.replace("✓", "⚠") + " — 일부 문서 실패";
     const rows = docTypes.map(dt => {
-      const label = `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
+      // 사업보고서(report)는 '검토보고서' 접미 없이 표기. review/review_sep 만 검토보고서.
+      const label = dt === "report" ? `${DOC_ICON[dt]} ${DOC_FULL[dt]}` : `${DOC_ICON[dt]} ${DOC_FULL[dt]} 검토보고서`;
       const d = (item.documents || []).find(x => x.doc_type === dt);
       if (!d || !d.collected) {
         if (isReq(dt) && fails[dt]) {
@@ -1277,14 +1303,15 @@
   }
 
   // ----- DART 자동 수집 (공용 코어 — 업로드 탭·라이브러리 패널 공유) -----
-  // docSel: 수집할 문서 선택 {review, review_sep} (불리언). 재무데이터는 항상 수집.
+  // docSel: 수집할 문서 선택 {review, review_sep, report} (불리언). 재무데이터는 항상 수집.
   function startCollect(company, period, docSel, statusEl) {
     statusEl.innerHTML = `<div class="info-banner">DART에서 ${company}·${periodLabel(period)} 수집 시작...</div>`;
     return fetch(`${API}/api/library/collect`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ company, period,
         include_review: !!docSel.review,
-        include_review_sep: !!docSel.review_sep }),
+        include_review_sep: !!docSel.review_sep,
+        include_report: !!docSel.report }),
     }).then(async res => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { statusEl.innerHTML = `<div class="warn-banner">${company} 수집 시작 실패: ${data.detail || "오류"}</div>`; return false; }
@@ -1308,8 +1335,9 @@
             // 구버전 상태/상세 부재 폴백 — 기존 한 줄 요약 유지
             const rev = item.review_collected ? "연결검토 ✓" : "연결검토 –";
             const revs = item.review_sep_collected ? "별도검토 ✓" : "별도검토 –";
+            const rep = item.report_collected ? " / 사업보고서 ✓" : "";
             const idx = (item.indexed || []).length ? ` · 인덱싱: ${item.indexed.join(", ")}` : "";
-            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rev} / ${revs}${idx}</div>`;
+            statusEl.innerHTML = `<div class="info-banner">✓ ${company}·${periodLabel(period)} 수집 완료 — ${rev} / ${revs}${rep}${idx}</div>`;
           }
           loadLibrary(); resolve(true);
         } else if (item.status === "error") {
@@ -1364,6 +1392,7 @@
     const docSel = {
       review: document.getElementById("add-review").checked,
       review_sep: document.getElementById("add-review-sep").checked,
+      report: document.getElementById("add-report").checked,
     };
     const statusEl = document.getElementById("add-status");
     const btn = document.getElementById("add-btn"); btn.disabled = true;
@@ -1847,7 +1876,7 @@
     const topic = (document.getElementById("memo-topic")||{}).value;
     if (!topic) return toast("주제를 선택하세요.");
     const out = document.getElementById("memo-result");
-    out.innerHTML = `<div class="info-banner">🤖 ${topic} — 4사 주석 비교 초안 생성 중...(Ollama, 최대 2분)</div>`;
+    out.innerHTML = `<div class="info-banner">🤖 ${topic} — 4사 주석 비교 초안 생성 중...(LLM, 최대 2분)</div>`;
     const qs = new URLSearchParams({ topic, period: INSIGHT_PERIOD, fs_div: INSIGHT_FSDIV, doc_type: INSIGHT_DOCTYPE, companies: COMPANIES.join(",") });
     let d;
     try { d = await fetch(`${API}/api/notes/compare-memo?${qs}`).then(r => r.json()); }
@@ -1858,7 +1887,7 @@
         <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-bottom:6px;">🤖 AI 비교 초안 — ${topic} (검토 필요)</div>
         <div style="font-size:13px;color:#1f2937;white-space:pre-wrap;line-height:1.6;">${d.memo.replace(/</g,'&lt;')}</div></div>`;
     } else if (d.mode === "retrieval_only") {
-      h += `<div class="info-banner">ℹ️ LLM 비활성(Ollama 미가동) — 출처만 표시합니다.</div>`;
+      h += llmOffBanner();
     } else if (d.mode === "no_evidence") {
       h += `<div class="warn-banner">근거 주석을 찾지 못했습니다.</div>`;
     }
@@ -1881,6 +1910,11 @@
     t.textContent = msg;
     t.classList.add("show");
     setTimeout(() => t.classList.remove("show"), 2000);
+  }
+
+  // LLM 미연결 시 AI 답변 영역 공용 안내(검색만 동작). retrieval_only 모드에서 사용.
+  function llmOffBanner() {
+    return `<div class="info-banner">ℹ️ <b>LLM 미연결</b> — 자연어질의는 검색만(retrieval_only) 동작하고 AI 답변 생성은 생략됩니다. 검색 결과(출처)는 정상 표시됩니다. AI 답변까지 보려면 LLM을 띄워 주세요.</div>`;
   }
   // ----- 주석 RAG (§5.4) -----
   let RAG_SOURCES = [];      // 출처 목록(인라인 미리보기 인덱스 참조)
@@ -1919,7 +1953,7 @@
         <div style="font-size:11px; font-weight:700; color:#5b21b6; margin-bottom:6px;">🤖 AI 답변 (주석 기반 · 검증 필요)</div>
         <div style="font-size:13px; color:#1f2937; white-space:pre-wrap; line-height:1.6;">${(d.answer).replace(/</g,'&lt;')}</div></div>`;
     } else if (d.mode === "retrieval_only") {
-      h += `<div class="info-banner">ℹ️ LLM 비활성(Ollama 미가동) — 검색된 출처만 표시합니다.</div>`;
+      h += llmOffBanner();
     } else if (d.mode === "no_evidence") {
       h += `<div class="warn-banner">선택한 문서에서 근거를 찾지 못했습니다. (다른 검색어를 쓰거나 라이브러리에서 검색 대상 문서를 추가·변경해 보세요)</div>`;
     }

@@ -282,10 +282,11 @@ def entry_dir(company: str, period: str) -> Path:
     return LIBRARY_ROOT / validate_company(company) / validate_period(period)
 
 
-# ── doc_type 2문서 모델 ──────────────────────────────────────────────────────
+# ── doc_type 3문서 모델 ──────────────────────────────────────────────────────
 # 한 (회사,기간) 셀이 review(연결재무제표 검토보고서)·review_sep(별도재무제표 검토보고서)
-# 두 문서를 보유. 모든 신규 파라미터 기본 "review"(연결).
-VALID_DOC_TYPES = {"review", "review_sep"}
+# ·report(사업/분기/반기보고서 본문) 를 보유. 모든 신규 파라미터 기본 "review"(연결).
+# report 는 연결·별도 혼재(fs_div 중립) 문서로, 검색 시 fs_div="all" 로 다룬다.
+VALID_DOC_TYPES = {"review", "review_sep", "report"}
 
 
 def validate_doc_type(doc_type: Optional[str]) -> str:
@@ -296,26 +297,27 @@ def validate_doc_type(doc_type: Optional[str]) -> str:
     if not doc_type:
         return "review"
     if doc_type not in VALID_DOC_TYPES:
-        raise HTTPException(400, f"알 수 없는 문서유형: {doc_type} (review|review_sep)")
+        raise HTTPException(400, f"알 수 없는 문서유형: {doc_type} (review|review_sep|report)")
     return doc_type
 
 
 def pdf_path(company: str, period: str, doc_type: str = "review") -> Path:
-    """문서유형별 작업본 PDF 경로. review→review.pdf, review_sep→review_sep.pdf."""
+    """문서유형별 작업본 PDF 경로. review→review.pdf, review_sep→review_sep.pdf, report→report.pdf."""
     dt = validate_doc_type(doc_type)
-    filename = "review_sep.pdf" if dt == "review_sep" else "review.pdf"
+    filename = {"review_sep": "review_sep.pdf", "report": "report.pdf"}.get(dt, "review.pdf")
     return entry_dir(company, period) / filename
 
 
 def index_path(company: str, period: str, doc_type: str = "review") -> Path:
-    """문서유형별 인덱스 경로. review→index_review.json, review_sep→index_review_sep.json."""
+    """문서유형별 인덱스 경로. review→index_review.json, review_sep→index_review_sep.json, report→index_report.json."""
     dt = validate_doc_type(doc_type)
-    filename = "index_review_sep.json" if dt == "review_sep" else "index_review.json"
+    filename = {"review_sep": "index_review_sep.json",
+                "report": "index_report.json"}.get(dt, "index_review.json")
     return entry_dir(company, period) / filename
 
 
 # 표준 작업본 파일명 — 원본명 폴백 스캔에서 반드시 제외(표준본을 "원본"으로 오인 방지).
-_STANDARD_PDF_NAMES = {"review.pdf", "review_sep.pdf"}
+_STANDARD_PDF_NAMES = {"review.pdf", "review_sep.pdf", "report.pdf"}
 
 
 def _filename_matches_doc_type(name: str, doc_type: str) -> bool:
@@ -323,11 +325,15 @@ def _filename_matches_doc_type(name: str, doc_type: str) -> bool:
 
     - review      : 연결검토 포함(연결재무제표 검토보고서).
     - review_sep  : 검토 포함 & 연결 미포함(별도재무제표 검토보고서).
+    - report      : 사업/분기/반기보고서 포함 & 검토·감사 미포함(본문 보고서).
     """
     if doc_type == "review":
         return "연결검토" in name
     if doc_type == "review_sep":
         return "검토" in name and "연결" not in name
+    if doc_type == "report":
+        return (("사업보고서" in name or "분기보고서" in name or "반기보고서" in name)
+                and "검토" not in name and "감사" not in name)
     return False
 
 
@@ -411,6 +417,11 @@ def _strip_doc_fields(entry: dict, doc_type: str) -> dict:
         for k in [k for k in out if k.startswith("review_sep_")]:
             out.pop(k, None)
         out.pop("review_sep_collected", None)
+    elif doc_type == "report":
+        # report_* 제거. 단 report_nm(DART 보고서명 메타)은 doc_type 필드가 아니므로 보존.
+        for k in [k for k in out if k.startswith("report_") and k != "report_nm"]:
+            out.pop(k, None)
+        out.pop("report_collected", None)
     else:  # review
         for k in [k for k in out
                   if k.startswith("review_") and not k.startswith("review_sep_")]:
@@ -529,7 +540,7 @@ def safe_original_filename(name: Optional[str]) -> Optional[str]:
         return None
     if not base.lower().endswith(".pdf"):
         base += ".pdf"
-    if base.lower() in ("review.pdf", "review_sep.pdf"):    # 작업본과 충돌 방지
+    if base.lower() in _STANDARD_PDF_NAMES:    # 작업본(review/review_sep/report)과 충돌 방지
         base = "original_" + base
     return base
 
@@ -561,10 +572,15 @@ def detect_doc_type_from_text(text: str) -> Optional[str]:
 
     - review      : 연결검토(또는 연결+검토/감사) → 연결재무제표.
     - review_sep  : 검토/감사 & 연결 미포함 → 별도재무제표.
+    - report      : 사업/분기/반기보고서 & 검토·감사 미포함 → 본문 보고서(연결·별도 중립).
     """
     t = text or ""
     if "연결검토" in t:
         return "review"
+    # 사업/분기/반기보고서는 검토·감사보고서와 명확히 구분 — 검토/감사 키워드가 없을 때만 report.
+    if (("사업보고서" in t or "분기보고서" in t or "반기보고서" in t)
+            and "검토" not in t and "감사" not in t):
+        return "report"
     if ("검토" in t or "감사" in t) and "연결" not in t:
         return "review_sep"
     if "연결" in t and ("검토" in t or "감사" in t):  # 연결감사보고서
@@ -668,6 +684,18 @@ async def upload_to_library(
             "review_sep_notes_count": 0,
             "review_sep_detected_unit": None,
         }
+    elif dt == "report":
+        # report 업로드 → report_* 필드만 갱신, review/review_sep 보존.
+        fields = {
+            **existing,
+            "report_uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "report_filename_original": file.filename,
+            "report_pages": page_count,
+            "report_size_mb": round(len(content) / (1024 * 1024), 2),
+            "report_indexed": False,
+            "report_notes_count": 0,
+            "report_detected_unit": None,
+        }
     else:
         # review 업로드 → review_* 필드만 갱신, review_sep_* 보존.
         fields = {
@@ -739,6 +767,7 @@ async def get_library():
             **e,
             "review_filename_original": original_pdf_name(company, period, "review"),
             "review_sep_filename_original": original_pdf_name(company, period, "review_sep"),
+            "report_filename_original": original_pdf_name(company, period, "report"),
         })
 
     return {
@@ -777,11 +806,13 @@ def _cell_entry_from_disk(company: str, period: str) -> Optional[dict]:
             pass  # meta 손상 — 파일 기준 플래그만으로 진행
     entry["review_collected"] = pdf_path(company, period, "review").exists()
     entry["review_sep_collected"] = pdf_path(company, period, "review_sep").exists()
+    entry["report_collected"] = pdf_path(company, period, "report").exists()
     entry["fs_collected"] = (d / "fs_structured.json").exists()
 
-    has_any = any(entry.get(k) for k in ("review_collected",
-                                         "review_sep_collected", "fs_collected"))
-    for dt, prefix in (("review", "review_"), ("review_sep", "review_sep_")):
+    has_any = any(entry.get(k) for k in ("review_collected", "review_sep_collected",
+                                         "report_collected", "fs_collected"))
+    for dt, prefix in (("review", "review_"), ("review_sep", "review_sep_"),
+                       ("report", "report_")):
         ip = index_path(company, period, dt)
         if not ip.exists():
             continue
@@ -1592,6 +1623,18 @@ async def embed_and_write_index(company, period, doc_type, notes, detected_unit,
             "review_sep_detected_unit": detected_unit,
             "review_sep_indexed_at": datetime.now(timezone.utc).isoformat(),
         }
+    elif dt == "report":
+        # report 인덱싱 → report_* 접두 필드만 갱신, review/review_sep 보존.
+        # 사업보고서는 연결·별도 혼재 → 합계 카운트만 의미. fs_div 별 카운트는 참고용.
+        updates = {
+            "report_indexed": True,
+            "report_notes_count": len(notes),
+            "report_notes_count_연결": n_conn,
+            "report_notes_count_별도": n_sep,
+            "report_source_type": source_type,
+            "report_detected_unit": detected_unit,
+            "report_indexed_at": datetime.now(timezone.utc).isoformat(),
+        }
     else:
         # review 인덱싱 → review_* 접두 필드만 갱신, review_sep_* 보존.
         updates = {
@@ -1783,7 +1826,8 @@ def _collect_company_blocking(company: str, year: int, reprt: str,
         return cdart.collect_company(client, api_key, company, corp_code, year, reprt,
                                      period, odr=odr,
                                      collect_review=include.get("review", True),
-                                     collect_review_sep=include.get("review_sep", True))
+                                     collect_review_sep=include.get("review_sep", True),
+                                     collect_report=include.get("report", False))
 
 
 def _doc_detail(company: str, period: str, d: dict) -> dict:
@@ -1864,6 +1908,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
 
     review_ok = bool(meta.get("review_collected"))
     review_sep_ok = bool(meta.get("review_sep_collected"))
+    report_ok = bool(meta.get("report_collected"))
     fs_ok = (entry_dir(company, period) / "fs_structured.json").exists()
 
     # (1) 수집 시점에 카탈로그 등록 — 인덱싱과 독립. 기존 행 필드는 보존(머지).
@@ -1876,19 +1921,21 @@ async def _collect_and_index(company: str, period: str, include: dict):
         "report_nm": meta.get("report_nm"),
         "review_collected": review_ok,
         "review_sep_collected": review_sep_ok,
+        "report_collected": report_ok,
         "fs_collected": fs_ok,
         "collected_at": datetime.now(timezone.utc).isoformat(),
     })
 
     COLLECT_STATUS[key] = {"status": "indexing", "stage": "indexing",
                            "review_collected": review_ok,
-                           "review_sep_collected": review_sep_ok}
+                           "review_sep_collected": review_sep_ok,
+                           "report_collected": report_ok}
 
     # (2) 디스크에 존재하는 표시용 PDF 인덱싱 — 사용자가 선택한 문서유형만.
     indexed: List[str] = []
     try:
-        for dt in ("review", "review_sep"):
-            if include.get(dt, True) and pdf_path(company, period, dt).exists():
+        for dt in ("review", "review_sep", "report"):
+            if include.get(dt, False) and pdf_path(company, period, dt).exists():
                 await index_entry(company, period, dt)
                 indexed.append(dt)
     except Exception as e:
@@ -1896,6 +1943,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
         COLLECT_STATUS[key] = {"status": "error", "error": _safe_err(e),
                                "review_collected": review_ok,
                                "review_sep_collected": review_sep_ok,
+                               "report_collected": report_ok,
                                "requested": include,
                                **_collect_details(company, period, meta)}
         return
@@ -1904,6 +1952,7 @@ async def _collect_and_index(company: str, period: str, include: dict):
         "status": "done",
         "review_collected": review_ok,
         "review_sep_collected": review_sep_ok,
+        "report_collected": report_ok,
         "fs_collected": fs_ok,
         "indexed": indexed,
         "rcept_no": meta.get("rcept_no"),
@@ -1918,6 +1967,7 @@ class CollectPayload(BaseModel):
     period: str
     include_review: bool = True           # 연결재무제표 검토보고서
     include_review_sep: bool = True       # 별도재무제표 검토보고서
+    include_report: bool = False          # 사업보고서 본문(best-effort — DART 첨부 미제공 시 업로드 폴백)
 
 
 @app.post("/api/library/collect")
@@ -1932,7 +1982,8 @@ async def start_collect(payload: CollectPayload, background: BackgroundTasks):
         raise HTTPException(409, "이미 수집이 진행 중입니다.")
     COLLECT_STATUS[key] = {"status": "running", "stage": "queued"}
     include = {"review": payload.include_review,
-               "review_sep": payload.include_review_sep}
+               "review_sep": payload.include_review_sep,
+               "report": payload.include_report}
     background.add_task(_collect_and_index, company, period, include)
     return {"status": "running", "company": company, "period": period}
 
@@ -1943,8 +1994,8 @@ async def start_collect(payload: CollectPayload, background: BackgroundTasks):
 class CompareTarget(BaseModel):
     company: str
     period: str
-    # 미지정 시 "review"(연결재무제표 검토보고서).
-    doc_type: Optional[Literal["review", "review_sep"]] = "review"
+    # 미지정 시 "review"(연결재무제표 검토보고서). report=사업보고서(연결·별도 중립).
+    doc_type: Optional[Literal["review", "review_sep", "report"]] = "review"
     # 연결/별도 1급 차원. 동일 fs_div 끼리만 비교(연결↔연결, 별도↔별도). "all"=전체.
     fs_div: Optional[Literal["연결", "별도", "all"]] = "연결"
 
@@ -2299,9 +2350,11 @@ def _load_body_index(company: str, period: str, doc_type: str = "review") -> Opt
 
 
 def _doc_indexed(entry: dict, doc_type: str = "review") -> bool:
-    """카탈로그 엔트리의 문서유형별 인덱싱 플래그(review_indexed / review_sep_indexed)."""
+    """카탈로그 엔트리의 문서유형별 인덱싱 플래그(review_indexed / review_sep_indexed / report_indexed)."""
     if doc_type == "review_sep":
         return bool(entry.get("review_sep_indexed"))
+    if doc_type == "report":
+        return bool(entry.get("report_indexed"))
     return bool(entry.get("review_indexed"))
 
 
@@ -2620,7 +2673,7 @@ async def fs_cons_subtotals(company: str, period: str):
 
 @app.get("/api/notes/account-refs")
 async def notes_account_refs(company: str, period: str, fs_div: str = "연결", top_k: int = 2,
-                             doc_type: Literal["review", "review_sep"] = "review"):
+                             doc_type: Literal["review", "review_sep", "report"] = "review"):
     """재무제표 핵심계정 ↔ 주석 정합 참조 — 계정명 임베딩 ↔ note title 임베딩 cosine 상위.
     숫자 자동일치 금지(후보 제시·확정은 사용자). AI 무경유(임베딩 결정론)."""
     idx = _load_index(company, period, doc_type)
@@ -2644,7 +2697,7 @@ async def notes_account_refs(company: str, period: str, fs_div: str = "연결", 
 @app.get("/api/notes/topic-map")
 async def notes_topic_map(period: str, fs_div: str = "연결",
                           companies: Optional[str] = None, note_kind: str = "전체",
-                          doc_type: Literal["review", "review_sep"] = "review"):
+                          doc_type: Literal["review", "review_sep", "report"] = "review"):
     """§5.2 표준 주제 매핑 — 4사 주석을 canonical topic으로 분류·정렬(임베딩, AI 무경유)."""
     want = [c for c in (companies or "").split(",") if c] or list(VALID_COMPANIES)
     topics = _load_topic_dict_topics() or DEFAULT_TOPICS
@@ -2668,7 +2721,7 @@ async def notes_topic_map(period: str, fs_div: str = "연결",
 @app.get("/api/notes/compare-memo")
 async def notes_compare_memo(topic: str, period: str, fs_div: str = "연결",
                              companies: Optional[str] = None, per_company: int = 1,
-                             doc_type: Literal["review", "review_sep"] = "review"):
+                             doc_type: Literal["review", "review_sep", "report"] = "review"):
     """§5.3 비교 메모 초안(옵트인) — 주제에 대한 4사 주석 정책·가정 차이 AI 초안.
     인용 강제: 근거(sources) 없으면 초안 생성 안 함. Ollama off=초안 없이 출처만."""
     topic = (topic or "").strip()
@@ -2723,7 +2776,7 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
                           note_kind: str = "전체", generate: bool = True,
                           include_body: bool = True,
                           cell_keys: Optional[str] = None,
-                          doc_type: Literal["review", "review_sep"] = "review"):
+                          doc_type: Literal["review", "review_sep", "report"] = "review"):
     q = (q or "").strip()
     if not q:
         raise HTTPException(400, "질의가 비어 있습니다.")
@@ -2756,6 +2809,9 @@ async def notes_rag_query(q: str, fs_div: str = "연결",
                 cell_dt[(co, pe)] = dt
         fs_div = "all"  # 선택 문서가 연결/별도 혼재 가능 → fs_div 필터 해제
     else:
+        # report(사업보고서)는 연결·별도 혼재 → fs_div 필터를 우회(all)해 본문 전체 검색.
+        if doc_type == "report":
+            fs_div = "all"
         want_companies = set((companies or "").split(",")) - {""} or set(VALID_COMPANIES)
         for e in load_catalog()["entries"]:
             if e.get("company") in want_companies and _doc_indexed(e, doc_type):
@@ -2826,7 +2882,7 @@ _SUGGEST_MAX_CELLS = 32
 @app.get("/api/terms/suggest")
 async def terms_suggest(q: str, companies: Optional[str] = None,
                         period: Optional[str] = None, fs_div: str = "연결",
-                        doc_type: Literal["review", "review_sep"] = "review"):
+                        doc_type: Literal["review", "review_sep", "report"] = "review"):
     """검색어 동의어/관련 용어 제안(오프라인·결정론·AI 무경유).
 
     안전경계: 로컬 어휘만 — synonyms 그룹 + 인덱싱된 주석 '제목'. 외부 API·임베딩·랭킹 무관여.

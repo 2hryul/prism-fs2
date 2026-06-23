@@ -455,6 +455,49 @@ def pick_review_doc_separate(docs) -> Optional[dict]:
     return None
 
 
+# 사업보고서(본문) 첨부 후보 키워드. 검토/감사보고서와 배타(본문 보고서만).
+_REPORT_TITLE_KEYWORDS: Tuple[str, ...] = ("사업보고서", "분기보고서", "반기보고서")
+
+
+def pick_report_doc(docs) -> Optional[dict]:
+    """attach_docs 결과에서 사업/분기/반기보고서 '본문' 첨부 1건 선택(best-effort).
+
+    조건: title 에 (사업/분기/반기보고서) 포함 AND 검토·감사 **미포함** AND url 존재.
+    주의: DART 정기보고서 본문은 대개 메인 공시(document.xml)라 첨부 PDF 로 노출되지
+    않는다 → 대부분 None(정상). 첨부 PDF 가 있는 예외 공시에서만 매칭. 미발견 시
+    호출부가 PDF 업로드 경로로 폴백 안내한다.
+    """
+    rows = _normalize_doc_rows(docs)
+    for title, url in rows:
+        if not url:
+            continue
+        if any(k in title for k in _REVIEW_BODY_KEYWORDS):  # 검토/감사보고서 배제
+            continue
+        if any(k in title for k in _REPORT_TITLE_KEYWORDS):
+            return {"title": title, "url": url}
+    return None
+
+
+def fetch_report_attachment(odr, rcept_no: str, dest_dir: Path,
+                            prefetched_docs=None,
+                            fail_reasons: Optional[dict] = None) -> Optional[dict]:
+    """사업보고서(본문) 첨부 PDF 수집 — _fetch_attachment_pdf 래퍼(best-effort).
+
+    picker=pick_report_doc, out=report.pdf, doc_type=report, source_type=full_report.
+    DART 가 본문 PDF 를 첨부로 제공하지 않으면 None(정상) → 업로드 경로로 폴백.
+    """
+    res = _fetch_attachment_pdf(
+        odr, rcept_no, dest_dir,
+        picker=pick_report_doc,
+        out_name="report.pdf", doc_type="report",
+        prefetched_docs=prefetched_docs,
+        fail_reasons=fail_reasons,
+    )
+    if res:  # 사업보고서는 본문+주석 전체 → full_report(검토보고서 slim 과 구분)
+        res["source_type"] = "full_report"
+    return res
+
+
 def is_pdf_bytes(head: bytes) -> bool:
     """파일 첫 바이트가 PDF 매직넘버(%PDF-)로 시작하는지 판정."""
     return bool(head) and head[:5] == _PDF_MAGIC
@@ -905,7 +948,8 @@ def pick_target_report(list_resp: dict, reprt_code: str, year: int) -> Optional[
 def collect_company(client, api_key: str, company: str, corp_code: str,
                     year: int, reprt_code: str, period: str, odr=None,
                     collect_review: bool = True,
-                    collect_review_sep: bool = True) -> dict:
+                    collect_review_sep: bool = True,
+                    collect_report: bool = False) -> dict:
     """회사 1곳 라이브 수집. fs_structured.json/source/meta.json 저장.
 
     인덱스(index_review*.json)는 절대 건드리지 않는다(인덱싱 경로 보존).
@@ -971,34 +1015,44 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     #    (네트워크 중복 회피). odr/rcept_no 없으면 양쪽 스킵.
     review = None
     review_sep = None
+    report = None
     fail_reasons: dict = {}  # 선택된 문서의 수집 실패 사유(doc_type→사유) — UI 안내용
-    # 사용자가 선택한 검토보고서만 첨부 수집 — 둘 다 미선택이면 attach_docs 호출 자체 생략.
-    # FY(사업보고서)는 FS-only 라 검토/감사보고서 첨부를 수집하지 않는다.
-    if odr and rcept_no and not is_fy and (collect_review or collect_review_sep):
+    # 검토보고서(review/review_sep)는 FY(사업보고서)에선 FS-only 라 미수집.
+    # 단 사업보고서 본문(report)을 명시 요청하면 FY 포함 첨부 스캔을 best-effort 로 시도한다
+    #   — DART 정기보고서 본문은 대개 첨부 PDF 가 아니라 대부분 미발견(정상) → 업로드로 폴백.
+    want_review = not is_fy and (collect_review or collect_review_sep)
+    if odr and rcept_no and (want_review or collect_report):
         try:
             attach_docs_rows = odr.attach_docs(rcept_no)
         except Exception as e:
             # 보안: 예외 메시지에 키 포함 URL 노출 가능 → 타입명만. 양쪽 스킵, 기존 수집은 계속.
             print(f"[collect_company] {company} attach_docs 실패 "
-                  f"({type(e).__name__}) — review/review_sep 스킵.", file=sys.stderr)
+                  f"({type(e).__name__}) — 첨부 수집 스킵.", file=sys.stderr)
             attach_docs_rows = None
-            for dt, sel in (("review", collect_review), ("review_sep", collect_review_sep)):
+            for dt, sel in (("review", want_review and collect_review),
+                            ("review_sep", want_review and collect_review_sep),
+                            ("report", collect_report)):
                 if sel:
                     fail_reasons[dt] = {"reason": "첨부문서 목록 조회 실패(재시도 권장)",
                                         "url": dart_viewer_url(rcept_no)}
         if attach_docs_rows is not None:
-            if collect_review:
+            if want_review and collect_review:
                 review = fetch_review_attachment(odr, rcept_no, d,
                                                  prefetched_docs=attach_docs_rows,
                                                  fail_reasons=fail_reasons)
             # 별도는 연결 review 와 동일 첨부 URL 이면 중복 저장하지 않는다(exclude_url).
-            if collect_review_sep:
+            if want_review and collect_review_sep:
                 review_sep = fetch_review_sep_attachment(
                     odr, rcept_no, d,
                     prefetched_docs=attach_docs_rows,
                     exclude_url=(review or {}).get("pdf_url"),
                     fail_reasons=fail_reasons,
                 )
+            # 사업보고서 본문(best-effort) — 첨부 PDF 있으면 report.pdf, 없으면 None(업로드 폴백).
+            if collect_report:
+                report = fetch_report_attachment(odr, rcept_no, d,
+                                                 prefetched_docs=attach_docs_rows,
+                                                 fail_reasons=fail_reasons)
 
     # documents[]: (성공 시)검토보고서(review)·별도검토보고서(review_sep).
     documents: List[dict] = []
@@ -1009,6 +1063,9 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
     if review_sep:
         review_sep.pop("pdf_url", None)  # review_sep 도 filename_original 포함(요구③)
         documents.append(review_sep)
+    if report:
+        report.pop("pdf_url", None)
+        documents.append(report)
 
     meta = {
         "company": company,
@@ -1028,6 +1085,7 @@ def collect_company(client, api_key: str, company: str, corp_code: str,
         "fetch_failures": fail_reasons,
         "review_collected": bool(review),
         "review_sep_collected": bool(review_sep),
+        "report_collected": bool(report),
     }
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                  encoding="utf-8")
