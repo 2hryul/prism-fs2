@@ -2750,6 +2750,19 @@ def _standard_doc_id(filename: str, content: bytes) -> str:
     return f"{_slugify_standard(filename)}_{hashlib.sha1(content).hexdigest()[:8]}"
 
 
+def _classify_standard(*texts) -> str:
+    """파일명/제목 토큰으로 기준서 분류 → "공시"|"표시"|"기타"(결정론).
+
+    예: '…금융상품_공시.pdf'→공시, '…금융상품_표시.pdf'→표시. 검색 시 공시 우선 정렬에 사용.
+    """
+    hay = " ".join(t for t in texts if t)
+    if "공시" in hay:
+        return "공시"
+    if "표시" in hay:
+        return "표시"
+    return "기타"
+
+
 def standard_dir(doc_id: str) -> Path:
     return STANDARDS_ROOT / doc_id
 
@@ -2817,10 +2830,12 @@ async def standards_upload(file: UploadFile = File(...), title: str = Form("")):
     orig = safe_original_filename(file.filename)
     if orig and orig.lower() != "doc.pdf":
         (d / orig).write_bytes(content)
+    _title = title.strip() or (file.filename or doc_id)
     upsert_standard(
         doc_id,
-        title=(title.strip() or (file.filename or doc_id)),
+        title=_title,
         filename_original=file.filename,
+        doc_class=_classify_standard(file.filename, _title),   # 파일명 기반 표시/공시 분류
         uploaded_at=datetime.now(timezone.utc).isoformat(),
         pages=pages, size_mb=round(len(content) / (1024 * 1024), 2),
         content_sha1=hashlib.sha1(content).hexdigest(),
@@ -2887,7 +2902,8 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
     titles = {d.get("doc_id"): d.get("title") for d in cat["docs"]}
     want = set((doc_ids or "").split(",")) - {""}
     cells = []
-    idx_by_doc: Dict[str, dict] = {}  # 스니펫 텍스트 보강용(로드한 인덱스 재활용)
+    idx_by_doc: Dict[str, dict] = {}   # 스니펫·part 조회용(로드 인덱스 재활용)
+    doc_meta: Dict[str, dict] = {}     # 정렬용: 분류(공시/표시)·문서명 검색 텍스트
     for d in cat["docs"]:
         did = d.get("doc_id")
         if (want and did not in want) or not d.get("indexed"):
@@ -2901,12 +2917,18 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
             continue
         cells.append({"company": did, "period": "-", "index": idx})
         idx_by_doc[did] = idx
+        # doc_class 미저장(구 업로드) 시 파일명/제목으로 즉시 파생(하위호환).
+        dc = d.get("doc_class") or _classify_standard(d.get("filename_original"), d.get("title"))
+        doc_meta[did] = {"class": dc,
+                         "hay": f"{d.get('filename_original') or ''} {d.get('title') or ''}"}
     if not cells:
         return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
+    q_terms = [t for t in dict.fromkeys(tokenize_korean(q)) if len(t) >= 2]
     try:
         q_emb = (await make_embedding(q)).tolist()
+        # 재정렬 대상 후보 풀 확보(공시·본문 우선 정렬이 top_k 절단보다 먼저 작동하도록).
         sources = notes_rag.retrieve(
-            q_emb, cells, fs_div="all", top_k=top_k, note_kind="전체",
+            q_emb, cells, fs_div="all", top_k=max(top_k, 40), note_kind="전체",
             query_text=q, tokenize=tokenize_korean, expand=synonyms.expand_query,
             bm25_cls=(BM25Okapi if (USE_BM25 and _HAS_BM25) else None),
             cos_w=COS_W_DEFAULT, cos_w_policy=COS_W_POLICY)
@@ -2914,20 +2936,34 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
         raise HTTPException(500, _safe_err(e))
     if not sources:  # 인용강제 — 근거 없으면 결과 없음
         return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
-    q_terms = [t for t in dict.fromkeys(tokenize_korean(q)) if len(t) >= 2]
+
+    def _unit(did, note_no):
+        for n in (idx_by_doc.get(did) or {}).get("notes", []):
+            if n.get("no") == note_no:
+                return n
+        return {}
 
     def _unit_text(did, note_no, match_page):
         # _best_unit 은 최상위가 첫 청크면 text=None(제목 임베딩과 동점) → 인덱스에서 직접 보강.
-        idx = idx_by_doc.get(did) or {}
-        for n in idx.get("notes", []):
-            if n.get("no") != note_no:
-                continue
-            chunks = n.get("chunks", [])
-            for ch in chunks:  # 매칭 페이지 청크 우선
-                if ch.get("page") == match_page and ch.get("text"):
-                    return ch["text"]
-            return chunks[0].get("text") if chunks else None
-        return None
+        chunks = _unit(did, note_no).get("chunks", [])
+        for ch in chunks:  # 매칭 페이지 청크 우선
+            if ch.get("page") == match_page and ch.get("text"):
+                return ch["text"]
+        return chunks[0].get("text") if chunks else None
+
+    # 결정론 복합 재정렬: ①공시 기준서 ②문서명에 질의어 ③본문(공시 요구사항) ④의미점수.
+    _CLASS_RANK = {"공시": 0, "표시": 1, "기타": 2}
+    _PART_RANK = {"본문": 0, "부록B": 1, "적용사례": 2, "결론도출근거": 3}
+
+    def _sort_key(s):
+        did = s.get("company")
+        meta = doc_meta.get(did, {})
+        name_hit = 0 if any(t in (meta.get("hay") or "") for t in q_terms) else 1
+        part = _unit(did, s.get("note_no")).get("part", "본문")
+        return (_CLASS_RANK.get(meta.get("class"), 2), name_hit,
+                _PART_RANK.get(part, 1), -(s.get("score") or 0.0))
+
+    sources = sorted(sources, key=_sort_key)[:top_k]
 
     def _snippet(text):
         t = re.sub(r"\s+", " ", (text or "").strip())
@@ -2944,6 +2980,8 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
         text = s.get("text") or _unit_text(did, s.get("note_no"), s.get("match_page"))
         # s["title"] = 유닛 제목(구조화 시 섹션명, 페이지폴백 시 "본문 p.N"). note_no = 문단번호/B번호.
         src_out.append({"doc_id": did, "title": titles.get(did),
+                        "doc_class": doc_meta.get(did, {}).get("class"),
+                        "part": _unit(did, s.get("note_no")).get("part"),
                         "note_no": s.get("note_no"), "section": s.get("title"),
                         "page_start": s.get("page_start"),
                         "page_end": s.get("page_end"), "match_page": s.get("match_page"),

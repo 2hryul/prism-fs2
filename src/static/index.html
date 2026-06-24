@@ -2118,7 +2118,7 @@
       out.innerHTML = `<div class="warn-banner">근거를 찾지 못했습니다. (다른 검색어를 쓰거나, 기준서를 인덱싱·선택해 보세요)</div>`;
       return;
     }
-    let h = `<div style="font-size:12px; color:#6b7280; margin:6px 0 4px;">📎 출처 (클릭 시 아래 원문 미리보기 · 매칭어 형광):</div><div style="display:flex; flex-direction:column; gap:6px;">`;
+    let h = `<div style="font-size:12px; color:#6b7280; margin:6px 0 4px;">📎 출처 — <b>공시 부분 우선</b> (1순위는 아래 원문 자동 표시 · 클릭 시 교체):</div><div style="display:flex; flex-direction:column; gap:6px;">`;
     h += STD_SOURCES.map((s, i) => {
       const pg = s.match_page || s.page_start;
       const snip = s.snippet ? escapeHtml(s.snippet) : "";
@@ -2126,19 +2126,32 @@
       const pageFallback = /^본문 p\./.test(s.section || "");
       const ref = pageFallback ? `p.${pg}` : `문단 ${escapeHtml(String(s.note_no||""))}`;
       const sec = (!pageFallback && s.section) ? ` · ${escapeHtml(s.section)}` : "";
-      return `<div class="cand-row" onclick="stdPreview(${i})" style="cursor:pointer; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;">
-        <div style="font-weight:600; font-size:12.5px;">📘 ${escapeHtml(s.title||s.doc_id)} · <span style="color:#1e40af;">${ref}</span>${sec}</div>
+      // 표시/공시 배지(공시=파랑, 표시=보라). part 배경(BC/IG)은 회색 보조표기.
+      const dc = s.doc_class || "";
+      const dcColor = dc === "공시" ? "#1e40af;background:#dbeafe" : (dc === "표시" ? "#6d28d9;background:#ede9fe" : "#6b7280;background:#f3f4f6");
+      const badge = dc ? `<span style="font-size:10px;font-weight:700;color:${dcColor};border-radius:999px;padding:1px 7px;margin-right:5px;">${dc}</span>` : "";
+      const partTag = (s.part && s.part !== "본문") ? `<span style="font-size:10px;color:#9ca3af;margin-left:5px;">${escapeHtml(s.part)}</span>` : "";
+      const sel = i === 0 ? " sel" : "";
+      return `<div class="cand-row${sel}" id="std-cand-${i}" onclick="stdPreview(${i})" style="cursor:pointer; padding:8px 10px; border:1px solid ${i===0?'#93c5fd':'#e5e7eb'}; border-radius:8px;${i===0?'background:#f0f7ff;':''}">
+        <div style="font-weight:600; font-size:12.5px;">${badge}📘 ${escapeHtml(s.title||s.doc_id)} · <span style="color:#1e40af;">${ref}</span>${sec}${partTag}</div>
         <div style="font-size:11px; color:#9ca3af;">p.${pg} · ${(s.score*100).toFixed(0)}%</div>
         ${snip ? `<div style="font-size:12px; color:#374151; margin-top:3px;">${snip}</div>` : ""}
       </div>`;
     }).join("");
     h += `</div>`;
     out.innerHTML = h;
+    // 공시 부분 우선 — 1순위 결과의 원문 PDF를 즉시 미리보기(요구사항: "먼저 PDF로 보여준다").
+    stdPreview(0);
   };
 
   window.stdPreview = function(i) {
     const s = STD_SOURCES[i]; if (!s) return;
     const pg = s.match_page || s.page_start; if (!pg) return;
+    // 선택 칩 강조 갱신
+    document.querySelectorAll("#std-result .cand-row").forEach((r, j) => {
+      r.style.background = j === i ? "#f0f7ff" : "";
+      r.style.borderColor = j === i ? "#93c5fd" : "#e5e7eb";
+    });
     const box = document.getElementById("std-preview");
     if (box) box.style.display = "";
     const url = `${API}/api/standards/pdf?doc_id=${encodeURIComponent(s.doc_id)}`;

@@ -164,3 +164,50 @@ def test_build_standard_index_fallback(tmp_path, monkeypatch, std_env):
     assert res["structured"] is False              # 폴백
     idx = json.loads((d / "index_body.json").read_text(encoding="utf-8"))
     assert idx["notes"] and all(n["no"].startswith("B") for n in idx["notes"])
+
+
+def test_classify_standard():
+    assert app._classify_standard("제1107호_금융상품_공시.pdf") == "공시"
+    assert app._classify_standard("제1032호_금융상품_표시.pdf") == "표시"
+    assert app._classify_standard("제1024호_특수관계자공시.pdf", "특수관계자 공시") == "공시"
+    assert app._classify_standard("그냥문서.pdf") == "기타"
+
+
+def _seed_indexed_standard(std_env, doc_id, doc_class, units):
+    """카탈로그 등록 + index_body.json 작성(인덱싱 완료 상태)."""
+    d = std_env / doc_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "index_body.json").write_text(
+        json.dumps({"company": doc_id, "period": "-", "structured": True, "notes": units},
+                   ensure_ascii=False), encoding="utf-8")
+    app.upsert_standard(doc_id, title=doc_id, filename_original=doc_id + ".pdf",
+                        doc_class=doc_class, indexed=True, chunks=len(units))
+
+
+def test_search_disclosure_and_body_first(std_env, monkeypatch):
+    """공시 기준서·본문(요구사항)이 표시 기준서·BC(배경)보다 먼저 정렬되는지."""
+    def unit(no, part, page):
+        return {"no": no, "title": part, "part": part, "fs_div": "all",
+                "page_start": page, "page_end": page, "embedding": [1.0, 0.0],
+                "chunks": [{"text": "위험 공시 요구사항 본문 " * 3, "page": page,
+                            "embedding": [1.0, 0.0], "tokens": ["위험"]}]}
+    # 표시 기준서(본문 1개) + 공시 기준서(본문 1개 + 결론도출근거 1개)
+    _seed_indexed_standard(std_env, "pres_표시_aaaa", "표시", [unit("10", "본문", 5)])
+    _seed_indexed_standard(std_env, "disc_공시_bbbb", "공시",
+                           [unit("BC1", "결론도출근거", 90), unit("35", "본문", 40)])
+
+    async def fake_emb(text):
+        import numpy as np
+        return np.array([1.0, 0.0])
+    monkeypatch.setattr(app, "make_embedding", fake_emb)
+
+    res = asyncio.run(app.standards_search(q="위험", doc_ids=None, top_k=10))
+    srcs = res["sources"]
+    assert srcs, "결과 없음"
+    # 1순위: 공시 기준서 + 본문
+    assert srcs[0]["doc_class"] == "공시"
+    assert srcs[0]["part"] == "본문" and srcs[0]["note_no"] == "35"
+    # 공시 BC 는 표시 본문보다 뒤(공시 우선) 이되 공시 본문보다도 뒤(본문 우선)
+    order = [(s["doc_class"], s["part"]) for s in srcs]
+    assert order.index(("공시", "본문")) < order.index(("공시", "결론도출근거"))
+    assert order.index(("공시", "본문")) < order.index(("표시", "본문"))
