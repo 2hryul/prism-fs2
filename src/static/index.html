@@ -535,11 +535,11 @@
   <!-- 업로드 -->
   <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:6px 0 12px; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px;">
     <div class="field" style="flex:1; min-width:220px;">
-      <label style="font-size:12px; color:#374151;">PDF 파일</label>
-      <input type="file" id="std-file" accept=".pdf">
+      <label style="font-size:12px; color:#374151;">PDF 파일 <span style="color:#9ca3af; font-weight:400;">(여러 개 선택 가능)</span></label>
+      <input type="file" id="std-file" accept=".pdf" multiple>
     </div>
     <div class="field" style="flex:1; min-width:180px;">
-      <label style="font-size:12px; color:#374151;">제목(선택 — 미입력 시 파일명)</label>
+      <label style="font-size:12px; color:#374151;">제목(선택 — 단일 파일만 적용, 다중은 파일명)</label>
       <input type="text" id="std-title" placeholder="예: K-IFRS 제1109호 금융상품">
     </div>
     <button class="btn" id="std-upload-btn" onclick="uploadStandard()" style="background:#1e40af;">⬆️ 업로드 + 인덱싱</button>
@@ -2059,23 +2059,34 @@
 
   window.uploadStandard = async function() {
     const fileEl = document.getElementById("std-file");
-    const f = fileEl.files[0];
-    if (!f) return toast("PDF 파일을 선택하세요.");
+    const files = [...(fileEl.files || [])];
+    if (!files.length) return toast("PDF 파일을 선택하세요.");
     const status = document.getElementById("std-upload-status");
     const btn = document.getElementById("std-upload-btn"); btn.disabled = true;
-    status.innerHTML = `<div class="info-banner">⬆️ 업로드 중...</div>`;
-    const fd = new FormData();
-    fd.append("file", f);
-    fd.append("title", (document.getElementById("std-title").value || "").trim());
-    let d;
-    try {
-      d = await fetch(`${API}/api/standards/upload`, { method: "POST", body: fd }).then(async r => {
-        const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || "오류"); return j; });
-    } catch (e) { status.innerHTML = `<div class="warn-banner">업로드 실패: ${e.message||e}</div>`; btn.disabled = false; return; }
-    status.innerHTML = `<div class="info-banner">✓ 업로드 완료 (${d.pages}쪽). 인덱싱을 시작합니다...</div>`;
+    // 제목은 단일 파일일 때만 적용(다중이면 각 파일명 사용).
+    const titleInput = (document.getElementById("std-title").value || "").trim();
+    let ok = 0;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      status.innerHTML = `<div class="info-banner">⬆️ [${i + 1}/${files.length}] ${escapeHtml(f.name)} 업로드·인덱싱 중...</div>`;
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("title", files.length === 1 ? titleInput : "");
+      let d;
+      try {
+        d = await fetch(`${API}/api/standards/upload`, { method: "POST", body: fd }).then(async r => {
+          const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || "오류"); return j; });
+      } catch (e) {
+        status.innerHTML = `<div class="warn-banner">${escapeHtml(f.name)} 실패: ${e.message || e}</div>`;
+        continue;   // 한 파일 실패해도 나머지 진행
+      }
+      await indexStandard(d.doc_id);   // 인덱싱 시작(백그라운드 폴링 — 목록에서 진행상태 표시)
+      ok++;
+      await loadStandards();
+    }
+    status.innerHTML = `<div class="info-banner">✓ ${ok}/${files.length}개 업로드·인덱싱 시작. 아래 목록에서 진행상태를 확인하세요.</div>`;
     fileEl.value = ""; document.getElementById("std-title").value = "";
     await loadStandards();
-    await indexStandard(d.doc_id);
     btn.disabled = false;
   };
 
