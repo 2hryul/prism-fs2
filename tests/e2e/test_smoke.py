@@ -58,12 +58,15 @@ def test_core_navigation_and_tabs(page):
     page.wait_for_selector("#matrix-table tr", timeout=15000)
     assert page.locator("#matrix-table tr").count() > 0
 
-    # 2) 회계기준서 탭: 업로드 폼·검색박스·목록 컨테이너 렌더
+    # 2) 회계기준서 탭: 검색창 상단 노출 + 업로드/목록은 '기준서 관리' 모달에 분리
     page.evaluate("showTab('standards')")
     page.wait_for_selector("#tab-standards:not(.hidden)", timeout=5000)
-    page.wait_for_selector("#std-file", timeout=5000)
-    page.wait_for_selector("#std-q", timeout=5000)
-    page.wait_for_selector("#std-list", timeout=5000)
+    page.wait_for_selector("#std-q", timeout=5000)            # 검색창(상단)
+    page.evaluate("openStdModal()")                            # 관리 모달 열기
+    page.wait_for_selector("#std-modal:not(.hidden)", timeout=5000)
+    page.wait_for_selector("#std-file", timeout=5000)          # 업로드(모달 내)
+    page.wait_for_selector("#std-list", timeout=5000)          # 목록(모달 내)
+    page.evaluate("closeStdModal()")
 
     # 3) 비교 조회 탭 표시
     page.evaluate("showTab('compare')")

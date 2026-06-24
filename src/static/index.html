@@ -351,39 +351,20 @@
     <h2 style="font-size:17px; font-weight:700;">📘 회계기준서 <span style="font-size:12px; color:#1e40af; background:#dbeafe; border-radius:999px; padding:2px 9px; font-weight:700;">검색전용</span></h2>
     <p class="tab-guide" id="guide-standards" style="color:#6b7280; font-size:13px; margin-top:4px;">회계기준서 등 <strong>PDF를 업로드</strong>하면 본문 전체를 인덱싱합니다. 검색하면 <strong>본문 출처(쪽수)와 원문 PDF</strong>를 매칭어 형광과 함께 보여줍니다. 숫자 재구성·AI 답변 없이 <strong>검색 결과(출처)만</strong> 제시합니다(근거 없으면 결과 없음).<span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('standards')">✕</span></p>
 
-    <!-- 업로드 -->
-    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:14px 0; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px;">
-      <div class="field" style="flex:1; min-width:240px;">
-        <label style="font-size:12px; color:#374151;">PDF 파일</label>
-        <input type="file" id="std-file" accept=".pdf">
-      </div>
-      <div class="field" style="flex:1; min-width:180px;">
-        <label style="font-size:12px; color:#374151;">제목(선택 — 미입력 시 파일명)</label>
-        <input type="text" id="std-title" placeholder="예: K-IFRS 제1109호 금융상품">
-      </div>
-      <button class="btn" id="std-upload-btn" onclick="uploadStandard()" style="background:#1e40af;">⬆️ 업로드 + 인덱싱</button>
-    </div>
-    <div id="std-upload-status" style="margin-bottom:10px;"></div>
-
-    <!-- 기준서 목록(라이브러리) -->
-    <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-      <span style="font-size:13px; font-weight:700; color:#374151;">📚 업로드한 기준서</span>
-      <span style="font-size:12px; color:#9ca3af;">체크한 문서만 검색(모두 해제 시 전체 검색)</span>
-    </div>
-    <div id="std-list" style="margin-bottom:16px;"></div>
-
-    <!-- 검색 -->
-    <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
-      <input type="text" id="std-q" placeholder="검색어 입력 (예: 리스 부채 측정)" style="flex:1;"
+    <!-- 검색(상단) -->
+    <div style="display:flex; gap:8px; align-items:center; margin:14px 0 6px;">
+      <input type="text" id="std-q" placeholder="검색어 입력 (예: 신용위험 공시, 리스 부채 측정)" style="flex:1;"
              onkeydown="if(event.key==='Enter')doStandardSearch()">
       <select id="std-kind" style="display:none;"></select>
       <button class="btn" onclick="doStandardSearch()" style="background:#1e40af;">🔍 검색</button>
+      <button class="preset-btn" onclick="openStdModal()" title="기준서 업로드·목록 관리(검색 대상 선택)">📁 기준서 관리</button>
     </div>
+    <div id="std-scope-hint" style="font-size:11px; color:#9ca3af; margin-bottom:10px;"></div>
     <div id="std-result"></div>
     <div id="std-preview" style="display:none; margin-top:12px;"></div>
 
     <div class="footer-note">
-      🔒 로컬 임베딩 + BM25 하이브리드 · 외부 호출 0(폐쇄망) · 본문 인용(쪽수)·원문 PDF 동반 · AI 답변 없음(검색전용).
+      🔒 로컬 임베딩 + BM25 하이브리드 · 외부 호출 0(폐쇄망) · 공시 부분 우선 · 본문 인용(쪽수)·원문 PDF 동반 · AI 답변 없음(검색전용).
     </div>
   </div>
 
@@ -545,6 +526,31 @@
     <div id="up-detect" class="detect-banner hidden"></div>
     <div id="up-status" style="margin-top:12px;"></div>
   </div>
+</div>
+
+<!-- 회계기준서 관리 모달(업로드 + 목록·검색대상 선택) — 검색 탭에서 '📁 기준서 관리'로 호출 -->
+<div id="std-modal-backdrop" class="modal-backdrop hidden" onclick="closeStdModal()"></div>
+<div id="std-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="회계기준서 관리">
+  <div class="modal-head"><span>📁 회계기준서 관리</span><span class="modal-x" onclick="closeStdModal()">✕</span></div>
+  <!-- 업로드 -->
+  <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:6px 0 12px; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px;">
+    <div class="field" style="flex:1; min-width:220px;">
+      <label style="font-size:12px; color:#374151;">PDF 파일</label>
+      <input type="file" id="std-file" accept=".pdf">
+    </div>
+    <div class="field" style="flex:1; min-width:180px;">
+      <label style="font-size:12px; color:#374151;">제목(선택 — 미입력 시 파일명)</label>
+      <input type="text" id="std-title" placeholder="예: K-IFRS 제1109호 금융상품">
+    </div>
+    <button class="btn" id="std-upload-btn" onclick="uploadStandard()" style="background:#1e40af;">⬆️ 업로드 + 인덱싱</button>
+  </div>
+  <div id="std-upload-status" style="margin-bottom:10px;"></div>
+  <!-- 기준서 목록(검색 대상 선택) -->
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+    <span style="font-size:13px; font-weight:700; color:#374151;">📚 업로드한 기준서</span>
+    <span style="font-size:12px; color:#9ca3af;">체크한 문서만 검색(모두 해제 시 전체 검색)</span>
+  </div>
+  <div id="std-list"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -2018,6 +2024,7 @@
       STD_DOCS = d.docs || [];
     } catch (e) { STD_DOCS = []; }
     renderStandardsList();
+    if (window._updateStdScopeHint) window._updateStdScopeHint();
   }
 
   function renderStandardsList() {
@@ -2048,7 +2055,7 @@
     }).join("");
   }
 
-  window.toggleStdSelect = function(id, on) { if (on) STD_SELECTED.add(id); else STD_SELECTED.delete(id); };
+  window.toggleStdSelect = function(id, on) { if (on) STD_SELECTED.add(id); else STD_SELECTED.delete(id); if (window._updateStdScopeHint) window._updateStdScopeHint(); };
 
   window.uploadStandard = async function() {
     const fileEl = document.getElementById("std-file");
@@ -2158,6 +2165,28 @@
     renderPdfRange(s.doc_id, "-", pg, pg, "std-preview", "report", s.title, STD_TERMS, pg, url);
     if (box) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
   };
+
+  // 기준서 관리 모달(업로드 + 목록·검색대상 선택) — 검색창 상단의 '📁 기준서 관리' 버튼.
+  window.openStdModal = function() {
+    document.getElementById("std-modal-backdrop").classList.remove("hidden");
+    document.getElementById("std-modal").classList.remove("hidden");
+    loadStandards();   // 최신 목록·인덱싱 상태 갱신
+  };
+  window.closeStdModal = function() {
+    document.getElementById("std-modal").classList.add("hidden");
+    document.getElementById("std-modal-backdrop").classList.add("hidden");
+    updateStdScopeHint();   // 선택한 검색 대상 안내 갱신
+  };
+  function updateStdScopeHint() {
+    const el = document.getElementById("std-scope-hint");
+    if (!el) return;
+    const n = (typeof STD_SELECTED !== "undefined") ? STD_SELECTED.size : 0;
+    const total = (typeof STD_DOCS !== "undefined") ? STD_DOCS.length : 0;
+    el.textContent = total === 0
+      ? "업로드된 기준서가 없습니다 — '📁 기준서 관리'에서 PDF를 올리세요."
+      : (n ? `검색 대상: 선택한 ${n}개 문서` : `검색 대상: 전체 ${total}개 문서 (관리에서 체크해 좁힐 수 있음)`);
+  }
+  window._updateStdScopeHint = updateStdScopeHint;
 
   // 초기 로드
   // 초보 안내 퀵스타트 — 닫기 전까지 노출(localStorage 로 1회 닫으면 유지).
