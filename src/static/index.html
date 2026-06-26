@@ -112,6 +112,11 @@
   .search-bar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
   .search-bar input { flex: 1; padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
   .search-bar select { padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; }
+  /* 회계기준서 검색 영역 — 깔끔한 포커스 패널(파랑 톤) */
+  .std-panel { background: #f7faff; border: 1px solid #e3edff; border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .std-panel .search-bar { margin-bottom: 0; }
+  .std-panel input:focus { outline: none; border-color: #1e40af; box-shadow: 0 0 0 3px rgba(30,64,175,.12); }
+  .std-scope { font-size: 12px; color: #6b7280; margin-top: 8px; padding-left: 2px; }
 
   /* C2 동의어/관련 용어 제안 — 로컬 어휘만(AI 무경유), 클릭 시 검색박스에 추가 */
   .suggest-area { margin: -6px 0 14px; display: none; }
@@ -349,18 +354,20 @@
   <!-- Tab: 회계기준서 (임의 PDF 업로드·인덱싱·검색·원문표시) -->
   <div id="tab-standards" class="panel hidden">
     <h2 style="font-size:17px; font-weight:700;">📘 회계기준서 <span style="font-size:12px; color:#1e40af; background:#dbeafe; border-radius:999px; padding:2px 9px; font-weight:700;">검색전용</span></h2>
-    <p class="tab-guide" id="guide-standards" style="color:#6b7280; font-size:13px; margin-top:4px;">회계기준서 등 <strong>PDF를 업로드</strong>하면 본문 전체를 인덱싱합니다. 검색하면 <strong>본문 출처(쪽수)와 원문 PDF</strong>를 매칭어 형광과 함께 보여줍니다. 숫자 재구성·AI 답변 없이 <strong>검색 결과(출처)만</strong> 제시합니다(근거 없으면 결과 없음).<span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('standards')">✕</span></p>
+    <p class="tab-guide" id="guide-standards" style="color:#6b7280; font-size:13px; margin-top:4px;">PDF를 업로드하면 본문을 인덱싱하고, 검색 시 <strong>쪽수·원문 PDF</strong>를 매칭어 형광과 함께 보여줍니다. <strong>AI 답변 없이 검색 결과(출처)만</strong> 제시합니다(근거 없으면 결과 없음).<span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('standards')">✕</span></p>
 
-    <!-- 검색(상단) -->
-    <div style="display:flex; gap:8px; align-items:center; margin:14px 0 6px;">
-      <input type="text" id="std-q" placeholder="검색어 입력 (예: 신용위험 공시, 리스 부채 측정)" style="flex:1;"
-             onkeydown="if(event.key==='Enter')doStandardSearch()">
-      <select id="std-kind" style="display:none;"></select>
-      <button class="btn" onclick="doStandardSearch()" style="background:#1e40af;">🔍 검색</button>
-      <button class="preset-btn" onclick="openStdModal()" title="기준서 업로드·목록 관리(검색 대상 선택)">📁 기준서 관리</button>
+    <!-- 검색 포커스 패널 -->
+    <div class="std-panel">
+      <div class="search-bar">
+        <input type="text" id="std-q" placeholder="검색어 입력 (예: 신용위험 공시, 리스 부채 측정)"
+               onkeydown="if(event.key==='Enter')doStandardSearch()">
+        <select id="std-kind" style="display:none;"></select>
+        <button class="btn" onclick="doStandardSearch()" style="background:#1e40af;">🔍 검색</button>
+        <button class="preset-btn" onclick="openStdModal()" title="기준서 업로드·목록 관리(검색 대상 선택)">📁 기준서 관리</button>
+      </div>
+      <div id="std-scope-hint" class="std-scope"></div>
     </div>
-    <div id="std-scope-hint" style="font-size:11px; color:#9ca3af; margin-bottom:10px;"></div>
-    <div id="std-result"></div>
+    <div id="std-result" style="margin-top:16px;"></div>
     <div id="std-preview" style="display:none; margin-top:12px;"></div>
 
     <div class="footer-note">
