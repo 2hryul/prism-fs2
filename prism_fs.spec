@@ -22,8 +22,8 @@ datas = [
 binaries = []
 # 앱 모듈 + uvicorn 런타임 서브모듈(동적 import 라 명시 필요).
 hiddenimports = [
-    "app", "paths", "safety", "fs_compare", "notes_rag",
-    "note_filters", "note_topics", "collect_dart", "synonyms",
+    "app", "paths", "safety", "notes_rag",
+    "note_filters", "note_topics", "collect_dart", "synonyms", "logsetup",
     "uvicorn.lifespan.on", "uvicorn.lifespan.off",
     "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto",

@@ -9,18 +9,9 @@
   body { background: #f4f5f7; color: #1f2937; min-height: 100vh; }
   .app { max-width: 1400px; margin: 0 auto; padding: 24px; }
   /* 비교조회·자연어질의 탭: 좌우 여백 최소화 → 뷰어·온톨로지 그래프 폭 최대화(가독성). */
-  body.cmp-wide .app, body.rag-wide .app, body.fs-wide .app { max-width: 100%; padding: 12px 14px; }
+  body.cmp-wide .app, body.rag-wide .app { max-width: 100%; padding: 12px 14px; }
   body.cmp-wide #tab-compare.panel { padding: 12px; }
   body.rag-wide #tab-rag.panel { padding: 12px; }
-  body.fs-wide #tab-fs.panel { padding: 12px; }
-  /* 재무제표 비교: 4사 열로 표가 넓음 → 계정(첫 컬럼) 고정해 가로 스크롤 시에도 보이게 */
-  #tab-fs .cov-table th:first-child, #tab-fs .cov-table td:first-child {
-    position: sticky; left: 0; z-index: 1; background: #fff;
-    width: 230px; max-width: 230px; } /* 긴 account_id 가 컬럼을 밀지 않게 폭 고정 */
-  #tab-fs .cov-table th:first-child { background: #f9fafb; z-index: 2; }
-  /* 계정 라벨(긴 한글명·account_id)을 줄바꿈해 첫 컬럼 폭 폭주 방지 */
-  #tab-fs .cov-table td:first-child strong { word-break: break-word; }
-  #tab-fs .cov-table td:first-child span { word-break: break-all; }
   header { display: flex; align-items: center; gap: 12px; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb; margin-bottom: 20px; }
   .logo { width: 36px; height: 36px; background: #0046ff; color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
   h1 { font-size: 20px; font-weight: 700; }
@@ -59,9 +50,6 @@
   .tab-hint { font-size: 12.5px; color: #6b7280; background: #f9fafb; border-left: 3px solid #c7d2fe;
     border-radius: 0 6px 6px 0; padding: 8px 12px; margin: 10px 0; line-height: 1.55; }
   .tab-hint b { color: #374151; }
-  /* 재무제표 비교 — 4사 섹션 헤더(회사별 표 구분) */
-  .fs-co-h { font-size: 14px; font-weight: 700; color: #1f2937; margin: 16px 0 6px; padding-left: 4px; border-left: 4px solid #0046ff; }
-  .fs-co-h:first-of-type { margin-top: 4px; }
   .matrix-cell { position: relative; padding: 8px; cursor: pointer; transition: all 0.15s; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
   .matrix-cell.filled { background: #f0fdf4; }
   .matrix-cell.filled:hover { background: #d1fae5; }
@@ -124,6 +112,11 @@
   .search-bar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
   .search-bar input { flex: 1; padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
   .search-bar select { padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; }
+  /* 회계기준서 검색 영역 — 깔끔한 포커스 패널(파랑 톤) */
+  .std-panel { background: #f7faff; border: 1px solid #e3edff; border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .std-panel .search-bar { margin-bottom: 0; }
+  .std-panel input:focus { outline: none; border-color: #1e40af; box-shadow: 0 0 0 3px rgba(30,64,175,.12); }
+  .std-scope { font-size: 12px; color: #6b7280; margin-top: 8px; padding-left: 2px; }
 
   /* C2 동의어/관련 용어 제안 — 로컬 어휘만(AI 무경유), 클릭 시 검색박스에 추가 */
   .suggest-area { margin: -6px 0 14px; display: none; }
@@ -239,7 +232,7 @@
     <button class="tab active" data-tab="library" onclick="showTab('library')">📚 라이브러리</button>
     <button class="tab" data-tab="compare" onclick="showTab('compare')">🔍 주석 비교조회</button>
     <button class="tab" data-tab="rag" onclick="showTab('rag')">🤖 주석 자연어 질의 (AI 보조)</button>
-    <button class="tab" data-tab="fs" onclick="showTab('fs')">📈 재무제표 비교</button>
+    <button class="tab" data-tab="standards" onclick="showTab('standards')">📘 회계기준서</button>
     <button class="tab" data-tab="coverage" onclick="showTab('coverage')">🧭 커버리지·공시갭</button>
   </div>
 
@@ -340,7 +333,7 @@
     <h2 style="font-size:17px; font-weight:700; color:#5b21b6;">🤖 주석 자연어 질의 <span style="font-size:12px; color:#5b21b6; background:#ede9fe; border-radius:999px; padding:2px 9px; font-weight:700;">AI 보조 · 인용 강제</span></h2>
     <p class="tab-guide" id="guide-rag" style="color:#6b7280; font-size:13px; margin:6px 0 12px;">
       <strong>문장으로 질문하면</strong> AI가 근거를 찾아 답합니다(예: "공정가치 Level 3 가정은?").
-      답변은 항상 <strong>출처(회사·주석번호·페이지)</strong>를 동반하고, <strong>숫자는 생성하지 않습니다</strong>(정량 비교는 📈 재무제표 비교 탭).
+      답변은 항상 <strong>출처(회사·주석번호·페이지)</strong>를 동반하고, <strong>숫자는 생성하지 않습니다</strong>.
       <strong>📚 라이브러리에서 선택한 문서만</strong> 검색합니다(회사·기간·연결/별도). 로컬 LLM 미연결 시 <strong>검색 결과(출처)만</strong> 표시.<br>
       <span style="color:#9ca3af;">키워드로 4사 주석을 표로 나란히 보려면 🔍 주석 비교조회 탭을 쓰세요.</span>
       <span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('rag')">✕</span>
@@ -358,26 +351,27 @@
     </div><!-- /rag-sub-nlq -->
   </div>
 
-  <!-- Tab: 재무제표 비교 (fs_compare 결정론 엔진) -->
-  <div id="tab-fs" class="panel hidden">
-    <h2 style="font-size:17px; font-weight:700;">📈 재무제표 비교 <span style="font-size:12px; color:#92400e; background:#fef3c7; border-radius:999px; padding:2px 9px; font-weight:700;">결정론</span></h2>
-    <p class="tab-guide" id="guide-fs" style="color:#6b7280; font-size:13px; margin-top:4px;">연결(CFS)/별도(OFS) 재무제표를 원문 그대로 비교합니다. 증감·차이·비율 등 <strong>파생값은 결정론 계산</strong>이며 각 값에 <strong>ⓘ 계산식 근거</strong>가 붙습니다. (단위 환산·AI 재구성 없음)<br><span style="color:#92400e;">기간: <strong>FY</strong>=연간확정(사업보고서 기준 재무데이터) · <strong>Q1~Q3</strong>=분기 잠정(검토). FY 손익·현금흐름은 전기 <em>연간</em>과 비교합니다.</span><span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('fs')">✕</span></p>
+  <!-- Tab: 회계기준서 (임의 PDF 업로드·인덱싱·검색·원문표시) -->
+  <div id="tab-standards" class="panel hidden">
+    <h2 style="font-size:17px; font-weight:700;">📘 회계기준서 <span style="font-size:12px; color:#1e40af; background:#dbeafe; border-radius:999px; padding:2px 9px; font-weight:700;">검색전용</span></h2>
+    <p class="tab-guide" id="guide-standards" style="color:#6b7280; font-size:13px; margin-top:4px;">PDF를 업로드하면 본문을 인덱싱하고, 검색 시 <strong>쪽수·원문 PDF</strong>를 매칭어 형광과 함께 보여줍니다. <strong>AI 답변 없이 검색 결과(출처)만</strong> 제시합니다(근거 없으면 결과 없음).<span class="guide-x" title="이 안내 닫기" onclick="dismissGuide('standards')">✕</span></p>
 
-    <div style="display:flex; gap:6px; margin:12px 0; flex-wrap:wrap;">
-      <button class="preset-btn fs-view on" data-view="delta" onclick="showFsView('delta')">① 시계열 증감 (QoQ/YoY)</button>
-      <button class="preset-btn fs-view" data-view="cons" onclick="showFsView('cons')">② 연결 vs 별도 (자회사효과)</button>
-      <button class="preset-btn fs-view" data-view="bench" onclick="showFsView('bench')">③ 4사 벤치마킹</button>
-      <button class="preset-btn fs-view" data-view="ratio" onclick="showFsView('ratio')">④ 안전 구조비율</button>
-      <button class="preset-btn fs-view" data-view="ts" onclick="showFsView('ts')">⑤ 시계열 추이</button>
-      <button class="preset-btn fs-view" data-view="flags" onclick="showFsView('flags')">⑥ 이상치 플래그</button>
-      <button class="preset-btn fs-view" data-view="adj" onclick="showFsView('adj')">⑦ 연결조정 상세</button>
+    <!-- 검색 포커스 패널 -->
+    <div class="std-panel">
+      <div class="search-bar">
+        <input type="text" id="std-q" placeholder="검색어 입력 (예: 신용위험 공시, 리스 부채 측정)"
+               onkeydown="if(event.key==='Enter')doStandardSearch()">
+        <select id="std-kind" style="display:none;"></select>
+        <button class="btn" onclick="doStandardSearch()" style="background:#1e40af;">🔍 검색</button>
+        <button class="preset-btn" onclick="openStdModal()" title="기준서 업로드·목록 관리(검색 대상 선택)">📁 기준서 관리</button>
+      </div>
+      <div id="std-scope-hint" class="std-scope"></div>
     </div>
-
-    <div id="fs-controls" style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px;"></div>
-    <div id="fs-result"></div>
+    <div id="std-result" style="margin-top:16px;"></div>
+    <div id="std-preview" style="display:none; margin-top:12px;"></div>
 
     <div class="footer-note">
-      🔒 원문 보존(<code>thstrm/frmtrm/frmtrm_q</code>) · 단위 환산 0 · 파생값은 결정론 계산 + 계산식 provenance · 출처 DART <code>fnlttSinglAcntAll → fs_structured.json</code>.
+      🔒 로컬 임베딩 + BM25 하이브리드 · 외부 호출 0(폐쇄망) · 공시 부분 우선 · 본문 인용(쪽수)·원문 PDF 동반 · AI 답변 없음(검색전용).
     </div>
   </div>
 
@@ -459,10 +453,6 @@
 
 </div>
 
-<div id="fs-pop" style="position:fixed; z-index:50; max-width:360px; background:#111827; color:#f3f4f6; border-radius:8px; padding:11px 13px; font-size:12px; line-height:1.6; box-shadow:0 6px 24px rgba(0,0,0,.3); display:none;">
-  <span style="float:right; cursor:pointer; color:#9ca3af;" onclick="document.getElementById('fs-pop').style.display='none'">✕</span>
-  <div id="fs-pop-body"></div>
-</div>
 
 <!-- 자료 추가 모달(DART 수집 + PDF 업로드) — 라이브러리 ➕ 버튼/빈 셀에서 호출 -->
 <div id="add-modal-backdrop" class="modal-backdrop hidden" onclick="closeAddModal()"></div>
@@ -543,6 +533,31 @@
     <div id="up-detect" class="detect-banner hidden"></div>
     <div id="up-status" style="margin-top:12px;"></div>
   </div>
+</div>
+
+<!-- 회계기준서 관리 모달(업로드 + 목록·검색대상 선택) — 검색 탭에서 '📁 기준서 관리'로 호출 -->
+<div id="std-modal-backdrop" class="modal-backdrop hidden" onclick="closeStdModal()"></div>
+<div id="std-modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="회계기준서 관리">
+  <div class="modal-head"><span>📁 회계기준서 관리</span><span class="modal-x" onclick="closeStdModal()">✕</span></div>
+  <!-- 업로드 -->
+  <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin:6px 0 12px; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px;">
+    <div class="field" style="flex:1; min-width:220px;">
+      <label style="font-size:12px; color:#374151;">PDF 파일 <span style="color:#9ca3af; font-weight:400;">(여러 개 선택 가능)</span></label>
+      <input type="file" id="std-file" accept=".pdf" multiple>
+    </div>
+    <div class="field" style="flex:1; min-width:180px;">
+      <label style="font-size:12px; color:#374151;">제목(선택 — 단일 파일만 적용, 다중은 파일명)</label>
+      <input type="text" id="std-title" placeholder="예: K-IFRS 제1109호 금융상품">
+    </div>
+    <button class="btn" id="std-upload-btn" onclick="uploadStandard()" style="background:#1e40af;">⬆️ 업로드 + 인덱싱</button>
+  </div>
+  <div id="std-upload-status" style="margin-bottom:10px;"></div>
+  <!-- 기준서 목록(검색 대상 선택) -->
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+    <span style="font-size:13px; font-weight:700; color:#374151;">📚 업로드한 기준서</span>
+    <span style="font-size:12px; color:#9ca3af;">체크한 문서만 검색(모두 해제 시 전체 검색)</span>
+  </div>
+  <div id="std-list"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -722,17 +737,16 @@
     document.querySelectorAll(".tab").forEach(t => {
       t.classList.toggle("active", t.dataset.tab === name);
     });
-    ["library","compare","rag","fs","coverage"].forEach(n => {
+    ["library","compare","rag","standards","coverage"].forEach(n => {
       const el = document.getElementById(`tab-${n}`);
       if (el) el.classList.toggle("hidden", n !== name);
     });
     // 비교조회·자연어질의 탭은 좌우 여백 최소화(뷰어·온톨로지 그래프 폭 최대화).
     document.body.classList.toggle("cmp-wide", name === "compare");
     document.body.classList.toggle("rag-wide", name === "rag");
-    document.body.classList.toggle("fs-wide", name === "fs");  // 4사 비교표 전체 폭 사용
     if (name === "library") loadLibrary();
     if (name === "compare") renderTargetsBar();
-    if (name === "fs") loadFsTab();
+    if (name === "standards") loadStandards();
     if (name === "coverage") loadInsight();
   }
 
@@ -1610,8 +1624,9 @@
 
   // 인라인 PDF 미리보기. terms 지정 시 매칭 질의어를 형광 표시하고 focusPage 로 자동 스크롤.
   async function renderPdfRange(company, period, start, end, containerId, docType = "review",
-                                docName = null, terms = null, focusPage = null) {
-    const url = `${API}/api/pdf?company=${encodeURIComponent(company)}&period=${encodeURIComponent(period)}&doc_type=${encodeURIComponent(docType)}`;
+                                docName = null, terms = null, focusPage = null, urlOverride = null) {
+    // urlOverride: 회계기준서 등 회사/기간 모델이 아닌 PDF 소스용(예: /api/standards/pdf?doc_id=).
+    const url = urlOverride || `${API}/api/pdf?company=${encodeURIComponent(company)}&period=${encodeURIComponent(period)}&doc_type=${encodeURIComponent(docType)}`;
     const pdf = await window.pdfjsLib.getDocument(url).promise;
     const container = document.getElementById(containerId);
     container.innerHTML = "";
@@ -2004,263 +2019,192 @@
   window.toast = toast;
   window.showTab = showTab;
 
-  // ===== 재무제표 비교 탭 (fs_compare 결정론 엔진 연동) =====
-  const FS_COMPANIES = ["신한", "KB", "하나", "우리"];
-  let fsSel = { company: "신한", period: "2026Q1", fsdiv: "연결", account: "ifrs-full_Assets", view: "delta", pkind: "분기" };
+  // ===== 회계기준서 탭 (임의 PDF 업로드·인덱싱·검색·원문표시 — 검색전용) =====
+  let STD_DOCS = [];               // /api/standards/list 캐시
+  const STD_SELECTED = new Set();  // 검색 대상 doc_id(빈 set = 전체 검색)
+  let STD_SOURCES = [];            // 검색 출처(미리보기 인덱스 참조)
+  let STD_TERMS = [];              // 매칭 형광 용어
 
-  function fsGrp(s){ // 원문 정수 문자열 → 콤마(표시용, 환산 아님)
-    if(s===null||s===undefined||s==="") return "—";
-    const neg=String(s).trim().startsWith("-"); const d=String(s).replace(/[^0-9]/g,"");
-    if(!d) return "—";
-    return (neg?"-":"")+d.replace(/\B(?=(\d{3})+(?!\d))/g,",");
+  async function loadStandards() {
+    try {
+      const d = await fetch(`${API}/api/standards/list`).then(r => r.json());
+      STD_DOCS = d.docs || [];
+    } catch (e) { STD_DOCS = []; }
+    renderStandardsList();
+    if (window._updateStdScopeHint) window._updateStdScopeHint();
   }
-  function fsAux(s){ // 보조 표기(별도 라인). 원값 불변.
-    const v=Number(s); if(!isFinite(v)||v===0) return "";
-    const a=Math.abs(v), sg=v<0?"-":"";
-    if(a>=1e12) return `≈ ${sg}${(a/1e12).toFixed(2)}조원`;
-    if(a>=1e8)  return `≈ ${sg}${(a/1e8).toFixed(0)}억원`;
-    return "";
+
+  function renderStandardsList() {
+    const box = document.getElementById("std-list");
+    if (!box) return;
+    if (!STD_DOCS.length) {
+      box.innerHTML = `<div style="color:#9ca3af; font-size:13px; padding:10px 0;">아직 업로드한 기준서가 없습니다. 위에서 PDF를 업로드하세요.</div>`;
+      return;
+    }
+    box.innerHTML = STD_DOCS.map(doc => {
+      const id = doc.doc_id, st = doc.index_status, running = st === "running", indexed = doc.indexed;
+      const checked = STD_SELECTED.has(id) ? "checked" : "";
+      let badge;
+      if (running) badge = `<span style="color:#1e40af;">인덱싱 ${Math.round((doc.index_progress||0)*100)}%</span>`;
+      else if (indexed) badge = `<span style="color:#047857;">✓ 인덱싱(${doc.chunks||0}청크)</span>`;
+      else badge = `<span style="color:#b45309;">미인덱싱</span>`;
+      const idxBtn = (!indexed && !running)
+        ? `<button class="preset-btn" onclick="indexStandard('${id}')">인덱싱</button>` : "";
+      return `<div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:6px;">
+        <input type="checkbox" ${checked} ${indexed?'':'disabled'} title="검색 대상 선택" onchange="toggleStdSelect('${id}',this.checked)" style="width:auto;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:600; font-size:13px; word-break:break-all;">📘 ${escapeHtml(doc.title||id)}</div>
+          <div style="font-size:11px; color:#6b7280;">${doc.pages||0}쪽 · ${doc.size_mb||0}MB · ${badge}</div>
+        </div>
+        ${idxBtn}
+        <button class="preset-btn" title="삭제" onclick="deleteStandard('${id}')">🗑</button>
+      </div>`;
+    }).join("");
   }
-  function fsCell(s){ const a=fsAux(s); return `<span style="font-weight:700;">${fsGrp(s)}</span>${a?`<div style="color:#9ca3af;font-size:11px;font-weight:600;">${a}</div>`:""}`; }
-  function fsProvBtn(prov){
-    if(!prov) return "";
-    const j=encodeURIComponent(JSON.stringify(prov));
-    return ` <span style="display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:50%;background:#eef2ff;color:#0046ff;font-size:10px;cursor:pointer;font-weight:700;" onclick="fsShowProv(event,'${j}')">ⓘ</span>`;
-  }
-  window.fsShowProv = function(ev, j){
-    const p=JSON.parse(decodeURIComponent(j));
-    let s=`<div style="font-weight:700;color:#93c5fd;margin-bottom:4px;">🔍 계산 근거 (결정론)</div>계산식: <code style="background:#1f2937;color:#fde68a;padding:1px 5px;border-radius:4px;">${p.formula}</code><br>`;
-    if(p.inputs){ s+="입력(원문):<br>"; p.inputs.forEach(i=>{ s+=`&nbsp;• ${i.label}: <code style="background:#1f2937;color:#fde68a;padding:1px 4px;border-radius:4px;">${fsGrp(i.raw)}</code> <span style="color:#9ca3af;">(${i.account_id} · ${i.period} · ${i.fs_div})</span><br>`; }); }
-    s+=`결과: <code style="background:#1f2937;color:#fde68a;padding:1px 5px;border-radius:4px;">${p.result}</code><br><span style="color:#9ca3af;">engine: deterministic · AI 미경유 · 단위 환산 없음</span>`;
-    const pop=document.getElementById("fs-pop"); document.getElementById("fs-pop-body").innerHTML=s;
-    pop.style.display="block";
-    let x=ev.clientX+12, y=ev.clientY+12; const r=pop.getBoundingClientRect();
-    if(x+r.width>innerWidth) x=innerWidth-r.width-12;
-    if(y+r.height>innerHeight) y=innerHeight-r.height-12;
-    pop.style.left=x+"px"; pop.style.top=y+"px"; ev.stopPropagation();
+
+  window.toggleStdSelect = function(id, on) { if (on) STD_SELECTED.add(id); else STD_SELECTED.delete(id); if (window._updateStdScopeHint) window._updateStdScopeHint(); };
+
+  window.uploadStandard = async function() {
+    const fileEl = document.getElementById("std-file");
+    const files = [...(fileEl.files || [])];
+    if (!files.length) return toast("PDF 파일을 선택하세요.");
+    const status = document.getElementById("std-upload-status");
+    const btn = document.getElementById("std-upload-btn"); btn.disabled = true;
+    // 제목은 단일 파일일 때만 적용(다중이면 각 파일명 사용).
+    const titleInput = (document.getElementById("std-title").value || "").trim();
+    let ok = 0;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      status.innerHTML = `<div class="info-banner">⬆️ [${i + 1}/${files.length}] ${escapeHtml(f.name)} 업로드·인덱싱 중...</div>`;
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("title", files.length === 1 ? titleInput : "");
+      let d;
+      try {
+        d = await fetch(`${API}/api/standards/upload`, { method: "POST", body: fd }).then(async r => {
+          const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || "오류"); return j; });
+      } catch (e) {
+        status.innerHTML = `<div class="warn-banner">${escapeHtml(f.name)} 실패: ${e.message || e}</div>`;
+        continue;   // 한 파일 실패해도 나머지 진행
+      }
+      await indexStandard(d.doc_id);   // 인덱싱 시작(백그라운드 폴링 — 목록에서 진행상태 표시)
+      ok++;
+      await loadStandards();
+    }
+    status.innerHTML = `<div class="info-banner">✓ ${ok}/${files.length}개 업로드·인덱싱 시작. 아래 목록에서 진행상태를 확인하세요.</div>`;
+    fileEl.value = ""; document.getElementById("std-title").value = "";
+    await loadStandards();
+    btn.disabled = false;
   };
-  document.addEventListener("click", e=>{ if(!e.target.closest("#fs-pop") && e.target.textContent!=="ⓘ") document.getElementById("fs-pop").style.display="none"; });
 
-  function loadFsTab(){ showFsView(fsSel.view); }
-  window.loadFsTab = loadFsTab;
-  function showFsView(v){
-    fsSel.view=v;
-    document.querySelectorAll(".fs-view").forEach(b=>b.classList.toggle("on", b.dataset.view===v));
-    renderFsControls();
-    renderFsView();
-  }
-  window.showFsView = showFsView;
+  window.indexStandard = async function(doc_id) {
+    try { await fetch(`${API}/api/standards/index/${encodeURIComponent(doc_id)}`, { method: "POST" }); }
+    catch (e) { toast("인덱싱 시작 실패"); return; }
+    pollStandardIndex(doc_id);
+  };
 
-  function fsOpt(id,label,val,opts,onch){
-    return `<div class="field"><label>${label}</label><select id="${id}" onchange="${onch}">`+
-      opts.map(o=>`<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join("")+`</select></div>`;
-  }
-  function renderFsControls(){
-    // 서버가 period_sort_key 로 정렬해 반환(…Q3, 2025FY, 2026Q1). 비면 분기 폴백.
-    const periods=(LIBRARY.available_periods&&LIBRARY.available_periods.length)
-      ?LIBRARY.available_periods.slice().reverse()  // 최신 기간이 위로
-      :["2026Q1","2025Q3","2025Q2"];
-    if(!periods.includes(fsSel.period)) fsSel.period=periods[0];
-    // 기간 드롭다운: FY 는 "연간확정(FY)" 라벨로 분기 잠정과 구분.
-    const perOpts=periods.map(p=>`<option value="${p}" ${p===fsSel.period?'selected':''}>${periodLabel(p)}</option>`).join("");
-    const per=`<div class="field"><label>기간</label><select id="fs-period" onchange="fsSel.period=this.value;renderFsView()">${perOpts}</select></div>`;
-    const fsd=fsOpt("fs-fsdiv","연결/별도",fsSel.fsdiv,["연결","별도"],"fsSel.fsdiv=this.value;renderFsView()");
-    const accs=[["ifrs-full_Assets","자산총계"],["ifrs-full_Liabilities","부채총계"],["ifrs-full_Equity","자본총계"],["ifrs-full_ProfitLossFromOperatingActivities","영업이익"],["ifrs-full_ProfitLoss","분기순이익"]];
-    const acc=`<div class="field"><label>계정</label><select id="fs-account" onchange="fsSel.account=this.value;renderFsView()">`+
-      accs.map(a=>`<option value="${a[0]}" ${a[0]===fsSel.account?'selected':''}>${a[1]}</option>`).join("")+`</select></div>`;
-    // 시계열 종류: 분기(누적) vs 연간(FY). 둘을 한 줄에 섞지 않음.
-    const pkind=fsOpt("fs-pkind","추이 종류",fsSel.pkind,["분기","연간"],"fsSel.pkind=this.value;renderFsView()");
-    const v=fsSel.view;
-    // 모든 보기는 4사(신한·KB·하나·우리)를 한 화면에 표시 → 회사 선택 드롭다운 없음.
-    let html="";
-    if(v==="delta") html=per+fsd;
-    else if(v==="cons"||v==="adj") html=per;
-    else if(v==="bench") html=per+fsd+acc;
-    else if(v==="ratio"||v==="flags") html=per+fsd;
-    else if(v==="ts") html=fsd+acc+pkind;  // 시계열: 종류(분기/연간)별 전 기간 자동
-    document.getElementById("fs-controls").innerHTML=html;
+  function pollStandardIndex(doc_id) {
+    const iv = setInterval(async () => {
+      let m; try { m = await fetch(`${API}/api/standards/index/status`).then(r => r.json()); } catch (e) { return; }
+      const st = m[doc_id]; if (!st) return;
+      const doc = STD_DOCS.find(x => x.doc_id === doc_id);
+      if (doc) {
+        doc.index_status = st.status; doc.index_progress = st.progress;
+        if (st.status === "done") { doc.indexed = true; doc.chunks = st.chunks; }
+        renderStandardsList();
+      }
+      if (st.status === "done" || st.status === "error") {
+        clearInterval(iv);
+        if (st.status === "error") toast("인덱싱 실패: " + (st.error || ""));
+        loadStandards();
+      }
+    }, 1200);
   }
 
-  async function fsGet(path, params){
-    const qs=new URLSearchParams(params).toString();
-    const r=await fetch(`/api/fs/${path}?${qs}`); return r.json();
-  }
-  // 4사 응답을 계정(account_id+sj_div) 기준으로 병합 → 같은 계정을 4사 열로 나란히 비교.
-  // 계정 순서: 가장 많은 계정을 가진 회사를 기준(spine)으로 두고, 나머지 회사의 미등장 계정을 뒤에 추가.
-  function fsMergeByAccount(datas){
-    let spine=0, max=-1;
-    datas.forEach((d,i)=>{ const n=((d&&d.rows)||[]).length; if(n>max){max=n;spine=i;} });
-    const order=[], seen=new Set(), meta={};
-    const key=r=>`${r.account_id}|${r.sj_div||''}`;
-    const push=r=>{ const k=key(r); if(!seen.has(k)){ seen.add(k); order.push(k); meta[k]={account_id:r.account_id,account_nm:r.account_nm,sj_div:r.sj_div}; } };
-    ((datas[spine]&&datas[spine].rows)||[]).forEach(push);
-    datas.forEach((d,i)=>{ if(i!==spine) ((d&&d.rows)||[]).forEach(push); });
-    const maps=datas.map(d=>{ const m={}; ((d&&d.rows)||[]).forEach(r=>{ m[key(r)]=r; }); return m; });
-    return order.map(k=>({ ...meta[k], byCo: maps.map(m=>m[k]||null) }));
-  }
-  // 계정 라벨 셀(좌측 고정 컬럼)
-  function fsAcctCell(a){ return `<td style="text-align:left;padding:8px 10px;"><strong>${a.account_nm||a.account_id}</strong><br><span style="color:#9ca3af;font-size:11px;">${a.account_id} · ${a.sj_div||''}</span></td>`; }
-  function renderFsView(){
-    const v=fsSel.view;
-    if(v==="delta") return fsViewDelta();
-    if(v==="cons") return fsViewCons();
-    if(v==="bench") return fsViewBench();
-    if(v==="ratio") return fsViewRatio();
-    if(v==="ts") return fsViewTs();
-    if(v==="flags") return fsViewFlags();
-    if(v==="adj") return fsViewAdj();
-  }
-  async function fsViewDelta(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("delta",{company:c,period:fsSel.period,fs_div:fsSel.fsdiv})));
-    const merged=fsMergeByAccount(datas);
-    let h=`<div class="warn-banner">같은 계정을 4사 나란히 비교 — 위=당기(원문), 아래=증감률(전기 대비, 파생). 비교 컬럼은 재무제표 종류별 자동(재무상태표=전기말, 손익=전기동기).</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">계정 · ${fsSel.period} · ${fsSel.fsdiv}</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    if(!merged.length) h+=`<tr><td colspan="5" class="empty-note">데이터 없음 (미수집/미존재)</td></tr>`;
-    merged.forEach(a=>{
-      h+=`<tr>`+fsAcctCell(a);
-      a.byCo.forEach(r=>{
-        if(!r){ h+=`<td style="text-align:center;color:#9ca3af;">—</td>`; return; }
-        let sub;
-        if(r.delta===null) sub=`<div style="color:#9ca3af;font-size:11px;">증감 N/A</div>`;
-        else{ const pos=Number(r.delta)>=0; sub=`<div style="color:${pos?'#047857':'#b91c1c'};font-size:11px;font-weight:600;">${pos?'▲':'▼'} ${r.pct}${typeof r.pct==='number'?'%':''}${fsProvBtn(r.provenance)}</div>`; }
-        h+=`<td style="text-align:right;padding:8px 10px;"><span style="font-weight:700;">${fsGrp(r.thstrm)}</span>${sub}</td>`;
-      });
-      h+=`</tr>`;
+  window.deleteStandard = async function(doc_id) {
+    if (!confirm("이 기준서를 삭제할까요? (PDF·인덱스 제거)")) return;
+    try { await fetch(`${API}/api/standards/${encodeURIComponent(doc_id)}`, { method: "DELETE" }); }
+    catch (e) { toast("삭제 실패"); return; }
+    STD_SELECTED.delete(doc_id); toast("삭제됨"); loadStandards();
+  };
+
+  window.doStandardSearch = async function() {
+    const q = document.getElementById("std-q").value.trim();
+    if (!q) return toast("검색어를 입력하세요.");
+    const out = document.getElementById("std-result");
+    out.innerHTML = `<div class="info-banner">🔍 검색 중...</div>`;
+    const params = new URLSearchParams({ q });
+    if (STD_SELECTED.size) params.set("doc_ids", [...STD_SELECTED].join(","));
+    let d;
+    try { d = await fetch(`${API}/api/standards/search?${params}`).then(r => r.json()); }
+    catch (e) { out.innerHTML = `<div class="warn-banner">검색 실패: ${e}</div>`; return; }
+    STD_SOURCES = d.sources || []; STD_TERMS = d.terms || [];
+    if (!STD_SOURCES.length) {
+      out.innerHTML = `<div class="warn-banner">근거를 찾지 못했습니다. (다른 검색어를 쓰거나, 기준서를 인덱싱·선택해 보세요)</div>`;
+      return;
+    }
+    let h = `<div style="font-size:12px; color:#6b7280; margin:6px 0 4px;">📎 출처 — <b>공시 부분 우선</b> (1순위는 아래 원문 자동 표시 · 클릭 시 교체):</div><div style="display:flex; flex-direction:column; gap:6px;">`;
+    h += STD_SOURCES.map((s, i) => {
+      const pg = s.match_page || s.page_start;
+      const snip = s.snippet ? escapeHtml(s.snippet) : "";
+      // 구조화(문단) vs 페이지 폴백 구분: 폴백 섹션은 "본문 p.N" 형태.
+      const pageFallback = /^본문 p\./.test(s.section || "");
+      const ref = pageFallback ? `p.${pg}` : `문단 ${escapeHtml(String(s.note_no||""))}`;
+      const sec = (!pageFallback && s.section) ? ` · ${escapeHtml(s.section)}` : "";
+      // 표시/공시 배지(공시=파랑, 표시=보라). part 배경(BC/IG)은 회색 보조표기.
+      const dc = s.doc_class || "";
+      const dcColor = dc === "공시" ? "#1e40af;background:#dbeafe" : (dc === "표시" ? "#6d28d9;background:#ede9fe" : "#6b7280;background:#f3f4f6");
+      const badge = dc ? `<span style="font-size:10px;font-weight:700;color:${dcColor};border-radius:999px;padding:1px 7px;margin-right:5px;">${dc}</span>` : "";
+      const partTag = (s.part && s.part !== "본문") ? `<span style="font-size:10px;color:#9ca3af;margin-left:5px;">${escapeHtml(s.part)}</span>` : "";
+      const sel = i === 0 ? " sel" : "";
+      return `<div class="cand-row${sel}" id="std-cand-${i}" onclick="stdPreview(${i})" style="cursor:pointer; padding:8px 10px; border:1px solid ${i===0?'#93c5fd':'#e5e7eb'}; border-radius:8px;${i===0?'background:#f0f7ff;':''}">
+        <div style="font-weight:600; font-size:12.5px;">${badge}📘 ${escapeHtml(s.title||s.doc_id)} · <span style="color:#1e40af;">${ref}</span>${sec}${partTag}</div>
+        <div style="font-size:11px; color:#9ca3af;">p.${pg} · ${(s.score*100).toFixed(0)}%</div>
+        ${snip ? `<div style="font-size:12px; color:#374151; margin-top:3px;">${snip}</div>` : ""}
+      </div>`;
+    }).join("");
+    h += `</div>`;
+    out.innerHTML = h;
+    // 공시 부분 우선 — 1순위 결과의 원문 PDF를 즉시 미리보기(요구사항: "먼저 PDF로 보여준다").
+    stdPreview(0);
+  };
+
+  window.stdPreview = function(i) {
+    const s = STD_SOURCES[i]; if (!s) return;
+    const pg = s.match_page || s.page_start; if (!pg) return;
+    // 선택 칩 강조 갱신
+    document.querySelectorAll("#std-result .cand-row").forEach((r, j) => {
+      r.style.background = j === i ? "#f0f7ff" : "";
+      r.style.borderColor = j === i ? "#93c5fd" : "#e5e7eb";
     });
-    h+=`</table></div>`; out.innerHTML=h;
+    const box = document.getElementById("std-preview");
+    if (box) box.style.display = "";
+    const url = `${API}/api/standards/pdf?doc_id=${encodeURIComponent(s.doc_id)}`;
+    renderPdfRange(s.doc_id, "-", pg, pg, "std-preview", "report", s.title, STD_TERMS, pg, url);
+    if (box) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
+  // 기준서 관리 모달(업로드 + 목록·검색대상 선택) — 검색창 상단의 '📁 기준서 관리' 버튼.
+  window.openStdModal = function() {
+    document.getElementById("std-modal-backdrop").classList.remove("hidden");
+    document.getElementById("std-modal").classList.remove("hidden");
+    loadStandards();   // 최신 목록·인덱싱 상태 갱신
+  };
+  window.closeStdModal = function() {
+    document.getElementById("std-modal").classList.add("hidden");
+    document.getElementById("std-modal-backdrop").classList.add("hidden");
+    updateStdScopeHint();   // 선택한 검색 대상 안내 갱신
+  };
+  function updateStdScopeHint() {
+    const el = document.getElementById("std-scope-hint");
+    if (!el) return;
+    const n = (typeof STD_SELECTED !== "undefined") ? STD_SELECTED.size : 0;
+    const total = (typeof STD_DOCS !== "undefined") ? STD_DOCS.length : 0;
+    el.textContent = total === 0
+      ? "업로드된 기준서가 없습니다 — '📁 기준서 관리'에서 PDF를 올리세요."
+      : (n ? `검색 대상: 선택한 ${n}개 문서` : `검색 대상: 전체 ${total}개 문서 (관리에서 체크해 좁힐 수 있음)`);
   }
-  async function fsViewCons(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("consolidated-vs-separate",{company:c,period:fsSel.period})));
-    const merged=fsMergeByAccount(datas);
-    let h=`<div class="warn-banner">같은 계정의 <strong>자회사효과 = 연결(CFS) − 별도(OFS)</strong>(추정·연결조정 미반영)를 4사 나란히 비교. 한쪽만 존재(대응 없음)면 계산 불가.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">계정 · ${fsSel.period} · 자회사효과</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    if(!merged.length) h+=`<tr><td colspan="5" class="empty-note">데이터 없음 (별도재무제표 미수집일 수 있음)</td></tr>`;
-    merged.forEach(a=>{
-      h+=`<tr>`+fsAcctCell(a);
-      a.byCo.forEach(r=>{
-        if(!r){ h+=`<td style="text-align:center;color:#9ca3af;">—</td>`; return; }
-        if(r.diff!==null&&r.diff!==undefined) h+=`<td style="text-align:right;padding:8px 10px;">${fsCell(r.diff)}${fsProvBtn(r.provenance)}</td>`;
-        else h+=`<td style="text-align:center;padding:8px 10px;"><span class="pc-badge" title="연결/별도 한쪽만 존재">대응 없음</span></td>`;
-      });
-      h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
-  async function fsViewBench(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const d=await fsGet("benchmark",{period:fsSel.period,account_id:fsSel.account,fs_div:fsSel.fsdiv});
-    let h="";
-    if(d.unit_warning) h+=`<div class="warn-banner">⚠️ 단위 불일치(${(d.units_seen||[]).join(", ")}) — 자동 환산하지 않습니다.</div>`;
-    else h+=`<div class="info-banner">단위: ${(d.units_seen||['—']).join(", ")} · 원문 표기 그대로.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">${d.account_nm} · ${fsSel.period} · ${fsSel.fsdiv}</th><th>당기(원문)</th><th>순위</th></tr>`;
-    (d.rows||[]).sort((a,b)=>a.rank-b.rank).forEach(r=>{
-      h+=`<tr><td style="text-align:left;padding:8px 10px;"><strong>${r.company}</strong></td><td style="text-align:right;padding:8px 10px;">${fsCell(r.thstrm)}</td><td style="text-align:center;padding:8px 10px;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;border-radius:50%;background:#0046ff;color:#fff;font-size:11px;font-weight:700;">${r.rank}</span></td></tr>`;
-    });
-    h+=`</table></div>`;
-    if((d.missing||[]).length) h+=`<p style="color:#6b7280;font-size:12px;margin-top:8px;"><span class="pc-badge">대응 없음</span> ${d.missing.join(", ")} — 해당 셀 미수집/미존재(순위 제외). DART 수집 후 표시됩니다.</p>`;
-    out.innerHTML=h;
-  }
-  async function fsViewRatio(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("ratio",{company:c,period:fsSel.period,fs_div:fsSel.fsdiv})));
-    let h=`<div class="warn-banner">같은 지표를 4사 나란히 비교. 비율은 분자·분모가 모두 원문에 존재할 때만 결정론 계산하고 계산식(ⓘ)을 첨부합니다.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">지표 · ${fsSel.period} · ${fsSel.fsdiv}</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    const labels=(datas.find(d=>d&&(d.rows||[]).length)||{rows:[]}).rows.map(r=>r.label);
-    if(!labels.length) h+=`<tr><td colspan="5" class="empty-note">데이터 없음</td></tr>`;
-    labels.forEach((label,li)=>{
-      h+=`<tr><td style="text-align:left;padding:8px 10px;"><strong>${label}</strong></td>`;
-      FS_COMPANIES.forEach((c,i)=>{
-        const r=((datas[i]||{}).rows||[])[li];
-        if(!r){ h+=`<td style="text-align:center;color:#9ca3af;">—</td>`; }
-        else if(r.value===null) h+=`<td style="text-align:center;"><span class="pc-badge" title="${r.reason||''}">계산 불가</span></td>`;
-        else h+=`<td style="text-align:right;padding:8px 10px;font-weight:700;">${r.value}${typeof r.value==='number'?'%':''}${fsProvBtn(r.provenance)}</td>`;
-      });
-      h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
-  // ⑤ 시계열 추이 (여러 기간 당기 원문 + 인접 Δ%)
-  async function fsViewTs(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const pk=fsSel.pkind==="연간"?"annual":"quarter";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("timeseries",{company:c,account_id:fsSel.account,fs_div:fsSel.fsdiv,period_kind:pk})));
-    const kindKo=fsSel.pkind==="연간"?"연간확정(FY) 다년 추이":"분기(누적) 추이";
-    const accNm=(datas.find(d=>d&&d.account_nm)||{}).account_nm||fsSel.account;
-    // 기간(행) × 4사(열) 병합 — 같은 계정·기간을 4사 나란히.
-    const order=[], seen=new Set();
-    datas.forEach(d=>((d&&d.rows)||[]).forEach(r=>{ if(!seen.has(r.period)){seen.add(r.period);order.push(r.period);} }));
-    order.sort((a,b)=>{ const ka=periodSortKey(a),kb=periodSortKey(b); return ka[0]-kb[0]||ka[1]-kb[1]; });
-    const maps=datas.map(d=>{ const m={}; ((d&&d.rows)||[]).forEach(r=>m[r.period]=r); return m; });
-    let h=`<div class="info-banner">${accNm} · ${fsSel.fsdiv} — ${kindKo}. 같은 계정을 4사 나란히(기간=행). 위=당기(원문), 아래=전기간 대비 Δ%. 분기 누적과 연간(12개월)은 섞지 않습니다.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">기간</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    if(!order.length) h+=`<tr><td colspan="5" class="empty-note">데이터 없음</td></tr>`;
-    order.forEach(p=>{
-      h+=`<tr><td style="text-align:left;padding:8px 10px;"><strong>${p}</strong></td>`;
-      maps.forEach(m=>{
-        const r=m[p];
-        if(!r||r.value==null){ h+=`<td style="text-align:center;color:#9ca3af;">—</td>`; return; }
-        let sub='';
-        if(r.delta!=null){ const pos=Number(r.delta)>=0; sub=`<div style="color:${pos?'#047857':'#b91c1c'};font-size:11px;font-weight:600;">${pos?'▲':'▼'} ${r.pct}${typeof r.pct==='number'?'%':''}${fsProvBtn(r.provenance)}</div>`; }
-        h+=`<td style="text-align:right;padding:8px 10px;"><span style="font-weight:700;">${fsGrp(r.value)}</span>${sub}</td>`;
-      });
-      h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
-  // ⑥ 이상치 플래그 (전기 대비 부호반전·급변)
-  async function fsViewFlags(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("flags",{company:c,period:fsSel.period,fs_div:fsSel.fsdiv})));
-    const thr=(datas.find(d=>d&&d.threshold_pct!=null)||{}).threshold_pct;
-    // flags 응답은 .flagged → fsMergeByAccount 가 쓰는 .rows 형태로 변환 후 병합.
-    const merged=fsMergeByAccount(datas.map(d=>({rows:(d&&d.flagged)||[]})));
-    let h=`<div class="warn-banner">전기 대비 <strong>부호 반전</strong> 또는 <strong>|증감률|≥${thr}%</strong> 계정을 4사 나란히 "확인 필요"로 표시(결정론 룰 — 판단 아님). 빈칸(–)은 해당 사 정상.</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">계정 · ${fsSel.period} · ${fsSel.fsdiv}</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    if(!merged.length) h+=`<tr><td colspan="5" class="empty-note">이상치 없음</td></tr>`;
-    merged.forEach(a=>{
-      h+=`<tr>`+fsAcctCell(a);
-      a.byCo.forEach(r=>{
-        if(!r){ h+=`<td style="text-align:center;color:#9ca3af;">–</td>`; return; }
-        h+=`<td style="text-align:left;padding:8px 10px;">${(r.reasons||[]).map(x=>`<span class="pc-badge" style="background:#fef3c7;color:#92400e;">${x}</span>`).join(' ')}<div style="color:#9ca3af;font-size:11px;margin-top:2px;">당기 ${fsGrp(r.thstrm)} · 전기 ${fsGrp(r.compare)}</div></td>`;
-      });
-      h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
-  // ⑦ 연결조정 상세 (자회사효과 소계 + 비중)
-  async function fsViewAdj(){
-    const out=document.getElementById("fs-result");
-    out.innerHTML="<p style='color:#9ca3af;'>불러오는 중…</p>";
-    const datas=await Promise.all(FS_COMPANIES.map(c=>fsGet("consolidated-subtotals",{company:c,period:fsSel.period})));
-    const merged=fsMergeByAccount(datas);
-    let h=`<div class="warn-banner">같은 핵심계정의 <strong>자회사효과(연결−별도)</strong>를 4사 나란히 — 위=차이, 아래=비중(차이/|연결|). 추정·연결조정 미반영·비감사. 한쪽만 존재 시 "대응 없음".</div>`;
-    h+=`<div class="matrix-wrap"><table class="cov-table"><tr><th class="topic-col" style="text-align:left;">계정 · ${fsSel.period}</th>`+
-      FS_COMPANIES.map(c=>`<th>${c}</th>`).join("")+`</tr>`;
-    if(!merged.length) h+=`<tr><td colspan="5" class="empty-note">데이터 없음 (별도재무제표 미수집일 수 있음)</td></tr>`;
-    merged.forEach(a=>{
-      h+=`<tr>`+fsAcctCell(a);
-      a.byCo.forEach(r=>{
-        if(!r){ h+=`<td style="text-align:center;color:#9ca3af;">—</td>`; return; }
-        if(r.diff!=null) h+=`<td style="text-align:right;padding:8px 10px;"><span style="font-weight:700;">${fsGrp(r.diff)}</span>${fsProvBtn(r.provenance)}<div style="color:#6b7280;font-size:11px;font-weight:600;">비중 ${r.pct_of_cfs}${typeof r.pct_of_cfs==='number'?'%':''}</div></td>`;
-        else h+=`<td style="text-align:center;"><span class="pc-badge">대응 없음</span></td>`;
-      });
-      h+=`</tr>`;
-    });
-    h+=`</table></div>`; out.innerHTML=h;
-  }
+  window._updateStdScopeHint = updateStdScopeHint;
 
   // 초기 로드
   // 초보 안내 퀵스타트 — 닫기 전까지 노출(localStorage 로 1회 닫으면 유지).

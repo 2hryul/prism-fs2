@@ -31,6 +31,7 @@ import re
 import sys
 import json
 import shutil
+import hashlib
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import collect_dart as cdart  # DART 수집 로직 재사용(동일 storage 레이아웃)
-import fs_compare  # 재무제표 결정론 비교 엔진(증감/연결vs별도/벤치/비율 + provenance)
 import notes_rag  # 주석 RAG(§5.4, 옵트인) — 정성 텍스트 전용, 숫자 무경유·인용 강제
 import note_filters  # 주석 종류(주기/서술형) 결정론 필터
 import note_topics  # §5.2 표준 주제 매핑(임베딩 분류, AI 무경유)
@@ -66,7 +66,11 @@ LIBRARY_ROOT = paths.LIBRARY_ROOT
 CATALOG_PATH = STORAGE_ROOT / "catalog.json"
 # Step 7: 주제사전 자동초안(build_topic_dict.py 산출). 있으면 coverage 토픽 소스로 사용.
 TOPIC_DICT_PATH = STORAGE_ROOT / "topic_dict.json"
+# 회계기준서 — 4개사/기간과 무관한 독립 문서공간(임의 업로드 PDF). 전용 카탈로그·디렉터리.
+STANDARDS_ROOT = paths.STANDARDS_ROOT
+STANDARDS_CATALOG_PATH = STANDARDS_ROOT / "catalog.json"
 LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
+STANDARDS_ROOT.mkdir(parents=True, exist_ok=True)
 
 VALID_COMPANIES = {"신한", "KB", "하나", "우리"}
 # 분기(Q1~Q3, 검토=잠정) + 연간확정(FY, 사업보고서 기준 fnlttSinglAcntAll).
@@ -1667,7 +1671,7 @@ def body_index_path(company: str, period: str, doc_type: str) -> Path:
 
 
 async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
-                           progress_cb=None) -> dict:
+                           progress_cb=None, out_path: Optional[Path] = None) -> dict:
     """PDF 전체 페이지를 본문 유닛(페이지 단위)으로 청킹·임베딩 → index_body_{dt}.json.
 
     주석 페이지 포함(전체 텍스트 검색). 재무수치(fs_structured.json)·주석 인덱스와는 별개의
@@ -1697,11 +1701,217 @@ async def build_body_index(company, period, doc_type, src_pdf, default_fs_div,
             })
             if progress_cb:
                 progress_cb(p / max(total_pages, 1))
-    with open(body_index_path(company, period, dt), "w", encoding="utf-8") as f:
+    with open(out_path or body_index_path(company, period, dt), "w", encoding="utf-8") as f:
         json.dump({"company": company, "period": period, "doc_type": dt,
                    "schema": INDEX_SCHEMA, "total_pages": total_pages,
                    "default_fs_div": default_fs_div, "notes": units}, f, ensure_ascii=False)
     return {"pages_indexed": len(units), "chunks": total_chunks}
+
+
+# ── 회계기준서 문단 파서 ──────────────────────────────────────────────────────
+# K-IFRS 기준서는 문단번호(1, 한3.1, 11A, B40, IG40E, BC72B)가 인용 단위다. 페이지 단위 대신
+# 문단 단위로 구조화 → 출처를 "문단 35H·신용위험"으로 제시(검색 정밀도·인용 품질↑).
+_STD_BC = re.compile(r"^BC(\d{1,3})[A-Z]{0,5}$")        # 결론도출근거
+_STD_IG = re.compile(r"^IG(\d{1,3})[A-Z]{0,3}$")        # 적용사례·실무적용지침
+_STD_B = re.compile(r"^B(\d{1,3})[A-Z]{0,2}$")          # 부록B 적용지침
+_STD_BODY = re.compile(r"^(한)?(\d{1,3})[A-Z]{0,3}(\.\d+)?$")  # 본문 1, 한3.1, 11A, 20D
+_STD_PAGENO = re.compile(r"^-\s*\d+\s*-$")
+_STD_TITLE = re.compile(r"^[가-힣][가-힣ㆍ·\s]+$")
+STD_MIN_PARAGRAPHS = 10   # 이 미만이면 비정형 → 페이지 단위 폴백
+
+
+def _std_anchor(s: str):
+    """줄이 문단번호 앵커면 (구획, 번호, 본문base) 반환. 아니면 None."""
+    if _STD_BC.match(s):
+        return ("결론도출근거", s, None)
+    if _STD_IG.match(s):
+        return ("적용사례", s, None)
+    if _STD_B.match(s):
+        return ("부록B", s, None)
+    m = _STD_BODY.match(s)
+    if m:
+        return ("본문", s, int(m.group(2)))
+    return None
+
+
+def _segment_standard_lines(pages: List) -> List[Dict[str, Any]]:
+    """문단 분할 코어(PDF I/O 분리 — 테스트 가능). pages: [(page_no_1based, [lines]), ...].
+
+    - 목차(목  차/목차) 페이지(앞 15개 한정)에서 섹션 제목 화이트리스트 추출 → 본문 섹션 태깅.
+    - 본문 앵커 단조증가 가드(base ≤ 직전+3, 1~60)로 표 안 숫자 오탐 차단.
+    - 부록B/적용사례(IG)/결론도출근거(BC)는 접두 패턴으로 구획 태깅.
+    - 목차 마지막 페이지 다음부터 본문 수집(표지·저작권·목차 자동 제외).
+    """
+    toc_titles, last_toc = set(), -1
+    for i, (pno, lines) in enumerate(pages[:15]):
+        joined = "\n".join(lines)
+        if "목  차" in joined or "목차" in joined:
+            last_toc = i
+            for ln in lines:
+                s = ln.strip()
+                if 2 <= len(s) <= 30 and _STD_TITLE.fullmatch(s):
+                    toc_titles.add(s)
+    body = pages[last_toc + 1:] if last_toc >= 0 else pages
+
+    units: List[Dict[str, Any]] = []
+    cur = None
+    cur_sec = ""
+    last_base = 0
+
+    def _flush():
+        if cur is not None:
+            cur["text"] = " ".join(x.strip() for x in cur["_buf"] if x.strip())
+            cur.pop("_buf", None)
+            units.append(cur)
+
+    for pno, lines in body:
+        for ln in lines:
+            s = ln.strip()
+            if not s or _STD_PAGENO.match(s):
+                continue
+            a = _std_anchor(s)
+            ok = False
+            if a:
+                part, no, base = a
+                if part == "본문":
+                    if base is not None and 1 <= base <= 60 and base <= last_base + 3:
+                        ok = True
+                        last_base = max(last_base, base)
+                else:
+                    ok = True
+            if ok:
+                _flush()
+                cur = {"no": a[1], "part": a[0], "section": cur_sec,
+                       "page_start": pno, "page_end": pno, "_buf": []}
+                continue
+            if s in toc_titles:               # 섹션 헤더(정확일치)
+                cur_sec = s
+            elif cur is not None:
+                cur["_buf"].append(s)
+                cur["page_end"] = pno
+    _flush()
+    # 빈/짧은(표 숫자·헤더 잔재) 유닛 드롭
+    return [u for u in units if len(u.get("text", "")) >= 20]
+
+
+def extract_standard_paragraphs(pdf_path: Path) -> List[Dict[str, Any]]:
+    """K-IFRS 기준서 PDF → 문단 단위 [{no, part, section, page_start, page_end, text}]."""
+    with fitz.open(pdf_path) as doc:
+        pages = [(pi + 1, doc[pi].get_text().split("\n")) for pi in range(doc.page_count)]
+    return _segment_standard_lines(pages)
+
+
+# 목차 문단범위 토큰(예: 73, 73~79, 16~22A, 80~80D, 한2.1). 제목열↔번호열 순서동기 페어링용.
+_STD_TOC_TOK = re.compile(r"^(?:한)?\d{1,3}[A-Z]{0,3}(?:\.\d+)?(?:\s*[~∼〜]\s*(?:한)?\d{1,3}[A-Z]{0,3}(?:\.\d+)?)?$")
+_STD_RANGE_SPLIT = re.compile(r"[~∼〜]")
+
+
+def _parse_toc_disclosure(pages: List) -> Optional[dict]:
+    """목차에서 '공시' 섹션의 문단범위 추출 → {'para_start','para_end'} 또는 None.
+
+    K-IFRS 목차는 2단(제목 열 전체 → '문단번호' → 범위 열 전체)으로 추출되며 순서가 동기된다.
+    목차 페이지('목 차' 또는 '문단번호' 포함)에서 제목 리스트·범위 리스트를 순서대로 모아
+    같은 인덱스로 페어링하고 '공시'에 대응하는 범위를 취한다. 개수 불일치/공시 부재면 None.
+    """
+    titles: List[str] = []
+    ranges: List[str] = []
+    for pno, lines in pages[:15]:
+        joined = "\n".join(lines)
+        if not ("목  차" in joined or "목차" in joined or "문단번호" in joined):
+            continue  # 목차 페이지만 스캔(본문 페이지 혼입 방지)
+        for ln in lines:
+            s = ln.strip()
+            if not s or _STD_PAGENO.match(s) or s in ("문단번호", "목차", "목  차"):
+                continue
+            if 2 <= len(s) <= 30 and _STD_TITLE.fullmatch(s):
+                titles.append(s)
+            elif _STD_TOC_TOK.match(s):
+                ranges.append(s)
+    if "공시" not in titles or len(titles) != len(ranges):
+        return None
+    rng = ranges[titles.index("공시")]
+    parts = _STD_RANGE_SPLIT.split(rng)
+    start = parts[0].strip()
+    end = parts[-1].strip() if len(parts) > 1 else start
+    return {"para_start": start, "para_end": end}
+
+
+def _resolve_section_page(pages: List, para_start: Optional[str]) -> Optional[int]:
+    """본문에서 '공시' 시작 페이지 해석. 섹션 헤딩 '공시' 라인 우선, 없으면 문단 앵커(para_start).
+
+    base<=60 인덱싱 가드와 무관한 독립 스캔(공시 문단>60 대응). 1-based 페이지 또는 None.
+    """
+    last_toc = -1
+    for i, (pno, lines) in enumerate(pages[:15]):
+        j = "\n".join(lines)
+        if "목  차" in j or "목차" in j:
+            last_toc = i
+    body = pages[last_toc + 1:] if last_toc >= 0 else pages
+    anchor_page = None
+    for pno, lines in body:
+        for ln in lines:
+            s = ln.strip()
+            if s == "공시":                      # 섹션 헤딩 = 공시 페이지(가장 신뢰)
+                return pno
+            if para_start and anchor_page is None and s == para_start:
+                anchor_page = pno
+    return anchor_page
+
+
+def _compute_standard_disclosure(pages: List) -> Optional[dict]:
+    """목차 '공시' 문단범위 + 본문 공시 페이지 → {'para_start','para_end','page_start'} 또는 None."""
+    toc = _parse_toc_disclosure(pages)
+    page = _resolve_section_page(pages, toc["para_start"] if toc else None)
+    if page is None:
+        return None
+    out = {"page_start": page}
+    if toc:
+        out.update(para_start=toc["para_start"], para_end=toc["para_end"])
+    return out
+
+
+async def build_standard_index(doc_id: str, src_pdf: Path, out_path: Path) -> dict:
+    """회계기준서 인덱싱 — 문단 파서 우선, 비정형(문단<임계) PDF 는 페이지 단위 폴백.
+
+    문단 단위 유닛(no=문단번호, title=섹션)을 build_body_index 와 동일 스키마로 저장 →
+    retrieve·검색·PDF 뷰어가 변경 없이 처리. fs_div="all"(중립).
+    """
+    with fitz.open(src_pdf) as doc:
+        pages = [(pi + 1, doc[pi].get_text().split("\n")) for pi in range(doc.page_count)]
+    paras = _segment_standard_lines(pages)
+    if len(paras) < STD_MIN_PARAGRAPHS:   # 비정형 → 현행 페이지 단위 인덱싱 폴백
+        res = await build_body_index(doc_id, "-", "report", src_pdf, "all", out_path=out_path)
+        res["structured"] = False
+        return res
+    disclosure = _compute_standard_disclosure(pages)   # 목차 기반 '공시' 섹션 페이지
+    units, total = [], 0
+    for p in paras:
+        if total >= BODY_MAX_CHUNKS_TOTAL:
+            break
+        ctexts = [c for c in _chunk_text(p["text"]) if len(c.strip()) >= 20][:BODY_MAX_CHUNKS_PER_PAGE]
+        if not ctexts:
+            continue
+        embs = await make_embeddings(ctexts)
+        pg = p["page_start"]
+        chunks = [{"text": c, "page": pg, "embedding": _round_emb(e),
+                   "tokens": tokenize_korean(c)} for c, e in zip(ctexts, embs)]
+        total += len(chunks)
+        units.append({
+            "no": p["no"], "title": p.get("section") or p["part"], "part": p["part"],
+            "fs_div": "all", "page_start": pg, "page_end": p.get("page_end", pg),
+            "embedding": _round_emb(embs[0]), "tokens": tokenize_korean(ctexts[0]),
+            "chunks": chunks, "is_body": True,
+        })
+    payload = {"company": doc_id, "period": "-", "doc_type": "report",
+               "schema": INDEX_SCHEMA, "structured": True, "notes": units}
+    if disclosure:
+        payload["disclosure"] = disclosure   # {para_start, para_end, page_start}
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    res = {"pages_indexed": len(units), "chunks": total, "structured": True}
+    if disclosure:
+        res["disclosure"] = disclosure
+    return res
 
 
 async def index_entry(company: str, period: str, doc_type: str = "review"):
@@ -2596,6 +2806,321 @@ async def serve_pdf(company: str, period: str, doc_type: str = "review"):
 
 
 # ----------------------------------------------------------------------------
+# 회계기준서(Accounting Standards) — 임의 업로드 PDF 독립 문서공간.
+# 4개사/기간과 무관. 업로드 → 본문 전체 인덱싱(build_body_index) → 검색(notes_rag.retrieve)
+# → 원문 출처·PDF 표시. 결정론·인용강제·검색전용(LLM 생성 없음).
+# ----------------------------------------------------------------------------
+_STD_ID_RE = re.compile(r"[^\w가-힣]+")
+
+
+def _slugify_standard(filename: str) -> str:
+    """파일명 → 안전한 슬러그(확장자 제거, 비-[\\w가-힣]→_, 길이캡 64)."""
+    base = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if base.lower().endswith(".pdf"):
+        base = base[:-4]
+    slug = _STD_ID_RE.sub("_", base).strip("_")
+    return (slug or "standard")[:64]
+
+
+def _standard_doc_id(filename: str, content: bytes) -> str:
+    """doc_id = {slug}_{sha1(content)[:8]}. 동일 PDF 멱등·동명이내용 분리·traversal 차단."""
+    return f"{_slugify_standard(filename)}_{hashlib.sha1(content).hexdigest()[:8]}"
+
+
+def _classify_standard(*texts) -> str:
+    """파일명/제목 토큰으로 기준서 분류 → "공시"|"표시"|"기타"(결정론).
+
+    예: '…금융상품_공시.pdf'→공시, '…금융상품_표시.pdf'→표시. 검색 시 공시 우선 정렬에 사용.
+    """
+    hay = " ".join(t for t in texts if t)
+    if "공시" in hay:
+        return "공시"
+    if "표시" in hay:
+        return "표시"
+    return "기타"
+
+
+def standard_dir(doc_id: str) -> Path:
+    return STANDARDS_ROOT / doc_id
+
+
+def standard_pdf_path(doc_id: str) -> Path:
+    return standard_dir(doc_id) / "doc.pdf"
+
+
+def standard_index_path(doc_id: str) -> Path:
+    return standard_dir(doc_id) / "index_body.json"
+
+
+def load_standards_catalog() -> dict:
+    """회계기준서 전용 카탈로그(기존 catalog.json 과 분리). 부재/손상 시 빈 구조."""
+    if not STANDARDS_CATALOG_PATH.exists():
+        return {"updated_at": None, "docs": []}
+    try:
+        return json.loads(STANDARDS_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"updated_at": None, "docs": []}
+
+
+def save_standards_catalog(cat: dict):
+    cat["updated_at"] = datetime.now(timezone.utc).isoformat()
+    STANDARDS_CATALOG_PATH.write_text(
+        json.dumps(cat, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def upsert_standard(doc_id: str, **fields):
+    """doc_id 1행 머지 upsert(기존 필드 보존)."""
+    cat = load_standards_catalog()
+    existing = next((d for d in cat["docs"] if d.get("doc_id") == doc_id), None)
+    if existing:
+        existing.update(fields)
+    else:
+        cat["docs"].append({"doc_id": doc_id, **fields})
+    save_standards_catalog(cat)
+
+
+def remove_standard(doc_id: str):
+    cat = load_standards_catalog()
+    cat["docs"] = [d for d in cat["docs"] if d.get("doc_id") != doc_id]
+    save_standards_catalog(cat)
+
+
+def _standard_exists(doc_id: str) -> bool:
+    """doc_id 화이트리스트(카탈로그 존재) — 경로 traversal 방어용."""
+    return any(d.get("doc_id") == doc_id for d in load_standards_catalog()["docs"])
+
+
+@app.post("/api/standards/upload")
+async def standards_upload(file: UploadFile = File(...), title: str = Form("")):
+    """회계기준서 PDF 업로드(회사/기간 없음). doc_id 부여 후 카탈로그 등록(미인덱싱)."""
+    content = await file.read()
+    try:
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            pages = doc.page_count
+    except Exception:
+        raise HTTPException(400, "유효한 PDF가 아닙니다.")
+    doc_id = _standard_doc_id(file.filename or "standard.pdf", content)
+    d = standard_dir(doc_id)
+    d.mkdir(parents=True, exist_ok=True)
+    standard_pdf_path(doc_id).write_bytes(content)
+    # 원본명 사본 보존(표시·다운로드용). 작업본명(doc.pdf)과 충돌 회피.
+    orig = safe_original_filename(file.filename)
+    if orig and orig.lower() != "doc.pdf":
+        (d / orig).write_bytes(content)
+    _title = title.strip() or (file.filename or doc_id)
+    upsert_standard(
+        doc_id,
+        title=_title,
+        filename_original=file.filename,
+        doc_class=_classify_standard(file.filename, _title),   # 파일명 기반 표시/공시 분류
+        uploaded_at=datetime.now(timezone.utc).isoformat(),
+        pages=pages, size_mb=round(len(content) / (1024 * 1024), 2),
+        content_sha1=hashlib.sha1(content).hexdigest(),
+        indexed=False, chunks=0, schema=INDEX_SCHEMA,
+    )
+    return {"doc_id": doc_id, "pages": pages, "indexed": False}
+
+
+@app.get("/api/standards/list")
+async def standards_list():
+    """업로드된 회계기준서 목록 + 인덱싱 진행상태."""
+    out = []
+    for d in load_standards_catalog()["docs"]:
+        st = INDEX_STATUS.get(f"standards/{d.get('doc_id')}") or {}
+        out.append({**d, "index_status": st.get("status"),
+                    "index_progress": st.get("progress")})
+    return {"docs": out}
+
+
+async def _index_standard(doc_id: str):
+    """본문 전체 인덱싱(build_body_index 재사용, 출력=standards 전용 경로)."""
+    key = f"standards/{doc_id}"
+    INDEX_STATUS[key] = {"status": "running", "progress": 0.0}
+    src = standard_pdf_path(doc_id)
+    if not src.exists():
+        INDEX_STATUS[key] = {"status": "error", "error": "PDF 없음"}
+        return
+    try:
+        # 기준서 문단 파서 우선(비정형 PDF 는 내부에서 페이지 단위 폴백).
+        res = await build_standard_index(doc_id, src, standard_index_path(doc_id))
+        upsert_standard(doc_id, indexed=True, chunks=res["chunks"],
+                        structured=res.get("structured", False),
+                        indexed_at=datetime.now(timezone.utc).isoformat())
+        INDEX_STATUS[key] = {"status": "done", "chunks": res["chunks"],
+                             "structured": res.get("structured", False)}
+    except Exception as e:
+        INDEX_STATUS[key] = {"status": "error", "error": _safe_err(e)}
+
+
+@app.post("/api/standards/index/{doc_id}")
+async def standards_index(doc_id: str, background: BackgroundTasks):
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    if INDEX_STATUS.get(f"standards/{doc_id}", {}).get("status") == "running":
+        raise HTTPException(409, "이미 인덱싱이 진행 중입니다.")
+    background.add_task(_index_standard, doc_id)
+    return {"status": "running", "doc_id": doc_id}
+
+
+@app.get("/api/standards/index/status")
+async def standards_index_status():
+    return {k.split("/", 1)[1]: v for k, v in INDEX_STATUS.items()
+            if k.startswith("standards/")}
+
+
+@app.get("/api/standards/search")
+async def standards_search(q: str, doc_ids: Optional[str] = None,
+                           top_k: int = SEARCH_TOP_K):
+    """선택(또는 전체) 회계기준서 본문 검색. 검색전용(LLM 생성 없음)·인용강제."""
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(400, "질의가 비어 있습니다.")
+    cat = load_standards_catalog()
+    titles = {d.get("doc_id"): d.get("title") for d in cat["docs"]}
+    want = set((doc_ids or "").split(",")) - {""}
+    cells = []
+    idx_by_doc: Dict[str, dict] = {}   # 스니펫·part 조회용(로드 인덱스 재활용)
+    doc_meta: Dict[str, dict] = {}     # 정렬용: 분류(공시/표시)·문서명 검색 텍스트
+    for d in cat["docs"]:
+        did = d.get("doc_id")
+        if (want and did not in want) or not d.get("indexed"):
+            continue
+        ip = standard_index_path(did)
+        if not ip.exists():
+            continue
+        try:
+            idx = json.loads(ip.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cells.append({"company": did, "period": "-", "index": idx})
+        idx_by_doc[did] = idx
+        # doc_class 미저장(구 업로드) 시 파일명/제목으로 즉시 파생(하위호환).
+        dc = d.get("doc_class") or _classify_standard(d.get("filename_original"), d.get("title"))
+        doc_meta[did] = {"class": dc,
+                         "hay": f"{d.get('filename_original') or ''} {d.get('title') or ''}"}
+    if not cells:
+        return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
+    q_terms = [t for t in dict.fromkeys(tokenize_korean(q)) if len(t) >= 2]
+    try:
+        q_emb = (await make_embedding(q)).tolist()
+        # 재정렬 대상 후보 풀 확보(공시·본문 우선 정렬이 top_k 절단보다 먼저 작동하도록).
+        sources = notes_rag.retrieve(
+            q_emb, cells, fs_div="all", top_k=max(top_k, 40), note_kind="전체",
+            query_text=q, tokenize=tokenize_korean, expand=synonyms.expand_query,
+            bm25_cls=(BM25Okapi if (USE_BM25 and _HAS_BM25) else None),
+            cos_w=COS_W_DEFAULT, cos_w_policy=COS_W_POLICY)
+    except Exception as e:
+        raise HTTPException(500, _safe_err(e))
+    if not sources:  # 인용강제 — 근거 없으면 결과 없음
+        return {"query": q, "sources": [], "terms": [], "mode": "no_evidence"}
+
+    def _unit(did, note_no):
+        for n in (idx_by_doc.get(did) or {}).get("notes", []):
+            if n.get("no") == note_no:
+                return n
+        return {}
+
+    def _unit_text(did, note_no, match_page):
+        # _best_unit 은 최상위가 첫 청크면 text=None(제목 임베딩과 동점) → 인덱스에서 직접 보강.
+        chunks = _unit(did, note_no).get("chunks", [])
+        for ch in chunks:  # 매칭 페이지 청크 우선
+            if ch.get("page") == match_page and ch.get("text"):
+                return ch["text"]
+        return chunks[0].get("text") if chunks else None
+
+    # 결정론 복합 재정렬: ①공시 기준서 ②문서명에 질의어 ③본문(공시 요구사항) ④의미점수.
+    _CLASS_RANK = {"공시": 0, "표시": 1, "기타": 2}
+    _PART_RANK = {"본문": 0, "부록B": 1, "적용사례": 2, "결론도출근거": 3}
+
+    def _sort_key(s):
+        did = s.get("company")
+        meta = doc_meta.get(did, {})
+        name_hit = 0 if any(t in (meta.get("hay") or "") for t in q_terms) else 1
+        part = _unit(did, s.get("note_no")).get("part", "본문")
+        return (_CLASS_RANK.get(meta.get("class"), 2), name_hit,
+                _PART_RANK.get(part, 1), -(s.get("score") or 0.0))
+
+    sources = sorted(sources, key=_sort_key)[:top_k]
+
+    def _snippet(text):
+        t = re.sub(r"\s+", " ", (text or "").strip())
+        if not t:
+            return None
+        hits = [t.find(term) for term in q_terms if t.find(term) >= 0]
+        if hits:
+            start = max(0, min(hits) - 20)
+            return ("…" if start > 0 else "") + t[start:start + 100]
+        return t[:100]
+    src_out = []
+    for s in sources:
+        did = s.get("company")
+        text = s.get("text") or _unit_text(did, s.get("note_no"), s.get("match_page"))
+        # s["title"] = 유닛 제목(구조화 시 섹션명, 페이지폴백 시 "본문 p.N"). note_no = 문단번호/B번호.
+        src_out.append({"doc_id": did, "title": titles.get(did),
+                        "doc_class": doc_meta.get(did, {}).get("class"),
+                        "part": _unit(did, s.get("note_no")).get("part"),
+                        "note_no": s.get("note_no"), "section": s.get("title"),
+                        "page_start": s.get("page_start"),
+                        "page_end": s.get("page_end"), "match_page": s.get("match_page"),
+                        "score": s.get("score"), "snippet": _snippet(text)})
+
+    # 목차 기반 '공시' 섹션 최상위 고정 — 최상위 결과 문서의 공시 페이지를 1순위 미리보기로.
+    # disclosure 메타(인덱싱 시 저장)가 있는 문서에만 적용. 없으면(구 인덱스·공시 미검출) 현행 유지.
+    if src_out:
+        top_did = src_out[0]["doc_id"]
+        disc = (idx_by_doc.get(top_did) or {}).get("disclosure")
+        pg = disc.get("page_start") if disc else None
+        if pg:
+            ps, pe = disc.get("para_start"), disc.get("para_end")
+            sec = f"📌 공시(목차 §{ps}~{pe})" if ps else "📌 공시(목차 기준)"
+            snip = None
+            for n in (idx_by_doc.get(top_did) or {}).get("notes", []):
+                for ch in n.get("chunks", []):
+                    if ch.get("page") == pg and ch.get("text"):
+                        snip = _snippet(ch["text"]); break
+                if snip:
+                    break
+            pin = {"doc_id": top_did, "title": titles.get(top_did), "doc_class": "공시",
+                   "part": "본문", "note_no": ps or "공시", "section": sec,
+                   "page_start": pg, "page_end": pg, "match_page": pg,
+                   "score": src_out[0].get("score"), "snippet": snip or "목차 기준 공시 섹션",
+                   "pinned": True}
+            # 같은 문서·같은 페이지 중복 제거 후 맨 앞에 고정.
+            rest = [s for s in src_out
+                    if not (s["doc_id"] == top_did and (s.get("match_page") or s.get("page_start")) == pg)]
+            src_out = [pin] + rest
+    return {"query": q, "sources": src_out, "terms": q_terms, "mode": "retrieval_only"}
+
+
+@app.get("/api/standards/pdf")
+async def standards_pdf(doc_id: str):
+    """회계기준서 원본 PDF 스트리밍(inline, #page 이동 지원). doc_id 화이트리스트 검증."""
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    target = standard_pdf_path(doc_id)
+    if not target.exists():
+        raise HTTPException(404, "PDF를 찾을 수 없습니다.")
+    doc = next((d for d in load_standards_catalog()["docs"]
+                if d.get("doc_id") == doc_id), {})
+    orig = doc.get("filename_original")
+    disposition = f"inline; filename*=UTF-8''{quote(orig)}" if orig else "inline"
+    return FileResponse(target, media_type="application/pdf",
+                        headers={"Content-Disposition": disposition})
+
+
+@app.delete("/api/standards/{doc_id}")
+async def standards_delete(doc_id: str):
+    if not _standard_exists(doc_id):
+        raise HTTPException(404, "기준서를 찾을 수 없습니다.")
+    d = standard_dir(doc_id)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+    remove_standard(doc_id)
+    INDEX_STATUS.pop(f"standards/{doc_id}", None)
+    return {"deleted": True, "doc_id": doc_id}
+
+
+# ----------------------------------------------------------------------------
 # Health
 # ----------------------------------------------------------------------------
 @app.get("/api/health")
@@ -2616,59 +3141,6 @@ async def health():
         "ollama_model": OLLAMA_MODEL if _OLLAMA_AVAILABLE else None,
         "library_size": len(cat["entries"]),
     }
-
-
-# ----------------------------------------------------------------------------
-# 재무제표 비교 — fs_compare.py(결정론) 래핑. 모든 파생값에 provenance 동봉.
-# ----------------------------------------------------------------------------
-@app.get("/api/fs/accounts")
-async def fs_accounts(company: str, period: str, fs_div: str = "연결"):
-    return {"rows": fs_compare.list_accounts(company, period, fs_div)}
-
-
-@app.get("/api/fs/delta")
-async def fs_delta(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.delta(company, period, fs_div)
-
-
-@app.get("/api/fs/consolidated-vs-separate")
-async def fs_cons_vs_sep(company: str, period: str):
-    return fs_compare.consolidated_vs_separate(company, period)
-
-
-@app.get("/api/fs/benchmark")
-async def fs_benchmark(period: str, account_id: str, fs_div: str = "연결"):
-    return fs_compare.benchmark(period, account_id, fs_div)
-
-
-@app.get("/api/fs/ratio")
-async def fs_ratio(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.ratio(company, period, fs_div)
-
-
-@app.get("/api/fs/timeseries")
-async def fs_timeseries(company: str, account_id: str, fs_div: str = "연결",
-                        period_kind: str = "quarter"):
-    # period_kind: 분기(누적)와 연간(FY, 12개월)을 한 줄 인접 비교로 섞으면 의미가 붕괴하므로
-    # 동일 종류끼리만 추이를 낸다. 미지원 값은 기본 quarter 로 폴백.
-    if period_kind not in ("quarter", "annual"):
-        period_kind = "quarter"
-    return fs_compare.timeseries(company, account_id, fs_div, period_kind)
-
-
-@app.get("/api/fs/timeseries-accounts")
-async def fs_timeseries_accounts():
-    return {"accounts": [{"account_id": a, "account_nm": n} for a, n in fs_compare.TIMESERIES_ACCOUNTS]}
-
-
-@app.get("/api/fs/flags")
-async def fs_flags(company: str, period: str, fs_div: str = "연결"):
-    return fs_compare.flags(company, period, fs_div)
-
-
-@app.get("/api/fs/consolidated-subtotals")
-async def fs_cons_subtotals(company: str, period: str):
-    return fs_compare.consolidated_subtotals(company, period)
 
 
 @app.get("/api/notes/account-refs")

@@ -30,4 +30,6 @@ MODEL_DIR = BUNDLE_DIR / "models" / "ko-sroberta"
 # storage 는 쓰기 영속(수집·인덱싱 결과) → exe 옆. 환경변수로 외부 지정 가능.
 STORAGE_ROOT = Path(os.getenv("PRISM_STORAGE") or (APP_DIR / "storage"))
 LIBRARY_ROOT = STORAGE_ROOT / "library"
+# 회계기준서 — 4개사/기간과 무관한 독립 문서공간(임의 업로드 PDF). 기존 라이브러리와 분리.
+STANDARDS_ROOT = STORAGE_ROOT / "accounting_standards"
 ENV_PATH = APP_DIR / ".env"
