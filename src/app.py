@@ -1801,17 +1801,89 @@ def extract_standard_paragraphs(pdf_path: Path) -> List[Dict[str, Any]]:
     return _segment_standard_lines(pages)
 
 
+# 목차 문단범위 토큰(예: 73, 73~79, 16~22A, 80~80D, 한2.1). 제목열↔번호열 순서동기 페어링용.
+_STD_TOC_TOK = re.compile(r"^(?:한)?\d{1,3}[A-Z]{0,3}(?:\.\d+)?(?:\s*[~∼〜]\s*(?:한)?\d{1,3}[A-Z]{0,3}(?:\.\d+)?)?$")
+_STD_RANGE_SPLIT = re.compile(r"[~∼〜]")
+
+
+def _parse_toc_disclosure(pages: List) -> Optional[dict]:
+    """목차에서 '공시' 섹션의 문단범위 추출 → {'para_start','para_end'} 또는 None.
+
+    K-IFRS 목차는 2단(제목 열 전체 → '문단번호' → 범위 열 전체)으로 추출되며 순서가 동기된다.
+    목차 페이지('목 차' 또는 '문단번호' 포함)에서 제목 리스트·범위 리스트를 순서대로 모아
+    같은 인덱스로 페어링하고 '공시'에 대응하는 범위를 취한다. 개수 불일치/공시 부재면 None.
+    """
+    titles: List[str] = []
+    ranges: List[str] = []
+    for pno, lines in pages[:15]:
+        joined = "\n".join(lines)
+        if not ("목  차" in joined or "목차" in joined or "문단번호" in joined):
+            continue  # 목차 페이지만 스캔(본문 페이지 혼입 방지)
+        for ln in lines:
+            s = ln.strip()
+            if not s or _STD_PAGENO.match(s) or s in ("문단번호", "목차", "목  차"):
+                continue
+            if 2 <= len(s) <= 30 and _STD_TITLE.fullmatch(s):
+                titles.append(s)
+            elif _STD_TOC_TOK.match(s):
+                ranges.append(s)
+    if "공시" not in titles or len(titles) != len(ranges):
+        return None
+    rng = ranges[titles.index("공시")]
+    parts = _STD_RANGE_SPLIT.split(rng)
+    start = parts[0].strip()
+    end = parts[-1].strip() if len(parts) > 1 else start
+    return {"para_start": start, "para_end": end}
+
+
+def _resolve_section_page(pages: List, para_start: Optional[str]) -> Optional[int]:
+    """본문에서 '공시' 시작 페이지 해석. 섹션 헤딩 '공시' 라인 우선, 없으면 문단 앵커(para_start).
+
+    base<=60 인덱싱 가드와 무관한 독립 스캔(공시 문단>60 대응). 1-based 페이지 또는 None.
+    """
+    last_toc = -1
+    for i, (pno, lines) in enumerate(pages[:15]):
+        j = "\n".join(lines)
+        if "목  차" in j or "목차" in j:
+            last_toc = i
+    body = pages[last_toc + 1:] if last_toc >= 0 else pages
+    anchor_page = None
+    for pno, lines in body:
+        for ln in lines:
+            s = ln.strip()
+            if s == "공시":                      # 섹션 헤딩 = 공시 페이지(가장 신뢰)
+                return pno
+            if para_start and anchor_page is None and s == para_start:
+                anchor_page = pno
+    return anchor_page
+
+
+def _compute_standard_disclosure(pages: List) -> Optional[dict]:
+    """목차 '공시' 문단범위 + 본문 공시 페이지 → {'para_start','para_end','page_start'} 또는 None."""
+    toc = _parse_toc_disclosure(pages)
+    page = _resolve_section_page(pages, toc["para_start"] if toc else None)
+    if page is None:
+        return None
+    out = {"page_start": page}
+    if toc:
+        out.update(para_start=toc["para_start"], para_end=toc["para_end"])
+    return out
+
+
 async def build_standard_index(doc_id: str, src_pdf: Path, out_path: Path) -> dict:
     """회계기준서 인덱싱 — 문단 파서 우선, 비정형(문단<임계) PDF 는 페이지 단위 폴백.
 
     문단 단위 유닛(no=문단번호, title=섹션)을 build_body_index 와 동일 스키마로 저장 →
     retrieve·검색·PDF 뷰어가 변경 없이 처리. fs_div="all"(중립).
     """
-    paras = extract_standard_paragraphs(src_pdf)
+    with fitz.open(src_pdf) as doc:
+        pages = [(pi + 1, doc[pi].get_text().split("\n")) for pi in range(doc.page_count)]
+    paras = _segment_standard_lines(pages)
     if len(paras) < STD_MIN_PARAGRAPHS:   # 비정형 → 현행 페이지 단위 인덱싱 폴백
         res = await build_body_index(doc_id, "-", "report", src_pdf, "all", out_path=out_path)
         res["structured"] = False
         return res
+    disclosure = _compute_standard_disclosure(pages)   # 목차 기반 '공시' 섹션 페이지
     units, total = [], 0
     for p in paras:
         if total >= BODY_MAX_CHUNKS_TOTAL:
@@ -1830,11 +1902,16 @@ async def build_standard_index(doc_id: str, src_pdf: Path, out_path: Path) -> di
             "embedding": _round_emb(embs[0]), "tokens": tokenize_korean(ctexts[0]),
             "chunks": chunks, "is_body": True,
         })
+    payload = {"company": doc_id, "period": "-", "doc_type": "report",
+               "schema": INDEX_SCHEMA, "structured": True, "notes": units}
+    if disclosure:
+        payload["disclosure"] = disclosure   # {para_start, para_end, page_start}
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"company": doc_id, "period": "-", "doc_type": "report",
-                   "schema": INDEX_SCHEMA, "structured": True, "notes": units},
-                  f, ensure_ascii=False)
-    return {"pages_indexed": len(units), "chunks": total, "structured": True}
+        json.dump(payload, f, ensure_ascii=False)
+    res = {"pages_indexed": len(units), "chunks": total, "structured": True}
+    if disclosure:
+        res["disclosure"] = disclosure
+    return res
 
 
 async def index_entry(company: str, period: str, doc_type: str = "review"):
@@ -2986,6 +3063,32 @@ async def standards_search(q: str, doc_ids: Optional[str] = None,
                         "page_start": s.get("page_start"),
                         "page_end": s.get("page_end"), "match_page": s.get("match_page"),
                         "score": s.get("score"), "snippet": _snippet(text)})
+
+    # 목차 기반 '공시' 섹션 최상위 고정 — 최상위 결과 문서의 공시 페이지를 1순위 미리보기로.
+    # disclosure 메타(인덱싱 시 저장)가 있는 문서에만 적용. 없으면(구 인덱스·공시 미검출) 현행 유지.
+    if src_out:
+        top_did = src_out[0]["doc_id"]
+        disc = (idx_by_doc.get(top_did) or {}).get("disclosure")
+        pg = disc.get("page_start") if disc else None
+        if pg:
+            ps, pe = disc.get("para_start"), disc.get("para_end")
+            sec = f"📌 공시(목차 §{ps}~{pe})" if ps else "📌 공시(목차 기준)"
+            snip = None
+            for n in (idx_by_doc.get(top_did) or {}).get("notes", []):
+                for ch in n.get("chunks", []):
+                    if ch.get("page") == pg and ch.get("text"):
+                        snip = _snippet(ch["text"]); break
+                if snip:
+                    break
+            pin = {"doc_id": top_did, "title": titles.get(top_did), "doc_class": "공시",
+                   "part": "본문", "note_no": ps or "공시", "section": sec,
+                   "page_start": pg, "page_end": pg, "match_page": pg,
+                   "score": src_out[0].get("score"), "snippet": snip or "목차 기준 공시 섹션",
+                   "pinned": True}
+            # 같은 문서·같은 페이지 중복 제거 후 맨 앞에 고정.
+            rest = [s for s in src_out
+                    if not (s["doc_id"] == top_did and (s.get("match_page") or s.get("page_start")) == pg)]
+            src_out = [pin] + rest
     return {"query": q, "sources": src_out, "terms": q_terms, "mode": "retrieval_only"}
 
 
